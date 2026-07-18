@@ -161,13 +161,18 @@ class FileManager(private val context: Context) {
         if (!src.exists()) return false
         val usbDir = getUSBStorages().firstOrNull() ?: return false
 
-        val dest = File(usbDir, src.name)
-        // Overwrite if exists
-        if (dest.exists()) dest.delete()
+        val name = src.name.substringBeforeLast('.')
+        val ext = src.name.substringAfterLast('.', "")
+        var dest = File(usbDir, src.name)
+        var idx = 1
+        while (dest.exists()) {
+            dest = File(usbDir, "${name}_${idx}.${ext}")
+            idx++
+        }
 
         return try {
             FileInputStream(src).use { i -> FileOutputStream(dest).use { o -> i.copyTo(o) } }
-            Log.d(TAG, "Copied to USB root: ${dest.absolutePath}")
+            Log.d(TAG, "Copied to USB: ${dest.absolutePath}")
             true
         } catch (e: Exception) {
             Log.w(TAG, "Direct USB copy failed: ${e.message}")
