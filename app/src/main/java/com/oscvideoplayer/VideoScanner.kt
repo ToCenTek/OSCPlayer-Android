@@ -17,15 +17,12 @@ class VideoScanner(private val context: Context) {
         private const val TAG = "VideoScanner"
         private const val CACHE_TTL_MS = 30_000L
 
-        val VIDEO_EXTENSIONS = setOf(
-            "mp4", "mkv", "avi", "mov", "webm", "m4v", "ts", "m2ts",
-            "flv", "wmv", "mpg", "mpeg", "3gp", "ogv", "divx", "vob"
-        )
+        private fun isMediaFile(filename: String): Boolean {
+            return FileManager.classifyFile(filename) != null
+        }
 
-        private fun isVideoFile(filename: String): Boolean {
-            if (filename.startsWith(".")) return false
-            val ext = filename.substringAfterLast('.', "").lowercase()
-            return ext in VIDEO_EXTENSIONS
+        fun isVideoFile(filename: String): Boolean {
+            return FileManager.isVideoFile(filename)
         }
     }
 
@@ -33,7 +30,8 @@ class VideoScanner(private val context: Context) {
         val name: String,
         val path: String,
         val size: Long,
-        val isFromUSB: Boolean
+        val isFromUSB: Boolean,
+        val mediaType: String = "video"
     )
 
     private var cachedVideos: List<VideoItem>? = null
@@ -68,7 +66,7 @@ class VideoScanner(private val context: Context) {
         try {
             fileObserver = object : FileObserver(dir.absolutePath, CREATE or DELETE or MOVED_FROM or MOVED_TO) {
                 override fun onEvent(event: Int, path: String?) {
-                    if (path != null && isVideoFile(path)) {
+                    if (path != null && isMediaFile(path)) {
                         invalidateCache()
                         Log.d(TAG, "File change detected: $path")
                     }
@@ -101,7 +99,6 @@ class VideoScanner(private val context: Context) {
     private fun scanUSBStorage(list: MutableSet<VideoItem>) {
         val checked = mutableSetOf<String>()
 
-        // 1. Use StorageManager (API 24+) for reliable external volume detection
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {
                 val sm = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
@@ -121,7 +118,6 @@ class VideoScanner(private val context: Context) {
             }
         }
 
-        // 2. Fallback: scan common mount points
         val candidates = listOf("/storage", "/mnt/media_rw", "/mnt/usb_storage",
             "/mnt/external_sd", "/mnt/extsd")
         for (base in candidates) {
@@ -141,28 +137,39 @@ class VideoScanner(private val context: Context) {
 
     private fun scanDirectoryRecursive(dir: File, list: MutableCollection<VideoItem>, isUSB: Boolean) {
         try {
-            val maxDepth = 8
-            scanRecursive(dir, list, isUSB, 0, maxDepth)
+            scanRecursive(dir, list, isUSB, 0, 8)
         } catch (e: Exception) {
-            Log.e(TAG, "Error scanning directory ${dir.absolutePath}: ${e.message}")
+            Log.e(TAG, "Error scanning ${dir.absolutePath}: ${e.message}")
         }
     }
 
-    private fun scanRecursive(dir: File, list: MutableCollection<VideoItem>, isUSB: Boolean, depth: Int, maxDepth: Int) {
+    private fun scanRecursive(
+        dir: File,
+        list: MutableCollection<VideoItem>,
+        isUSB: Boolean,
+        depth: Int,
+        maxDepth: Int
+    ) {
         if (depth > maxDepth) return
         val files = dir.listFiles() ?: return
         for (file in files) {
             if (file.isDirectory) {
-                if (!file.name.startsWith(".") && !file.name.startsWith("Android")) {
+                if (!file.name.startsWith(".") && !file.name.startsWith("Android")
+                    && !file.name.equals("System", ignoreCase = true)
+                    && !file.name.equals("LOST.DIR", ignoreCase = true)) {
                     scanRecursive(file, list, isUSB, depth + 1, maxDepth)
                 }
-            } else if (file.isFile && isVideoFile(file.name)) {
-                list.add(VideoItem(
-                    name = file.name,
-                    path = file.absolutePath,
-                    size = file.length(),
-                    isFromUSB = isUSB
-                ))
+            } else if (file.isFile) {
+                val type = FileManager.classifyFile(file.name)
+                if (type != null) {
+                    list.add(VideoItem(
+                        name = file.name,
+                        path = file.absolutePath,
+                        size = file.length(),
+                        isFromUSB = isUSB,
+                        mediaType = type.name.lowercase()
+                    ))
+                }
             }
         }
     }

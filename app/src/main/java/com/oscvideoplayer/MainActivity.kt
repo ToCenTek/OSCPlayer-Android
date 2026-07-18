@@ -91,6 +91,18 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_POWER_OFF = "power_off_time"
         private const val NSD_SERVICE_TYPE = "_osc._udp."
         private const val NSD_SERVICE_PORT = 8000
+        val interceptedKeys = setOf(
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN,
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP,
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_INFO,
+            KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK
+        )
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -1105,13 +1117,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
-        if (event != null) {
-            Log.d(TAG, "dispatchKeyEvent keyCode=${event.keyCode} action=${event.action}")
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                val kc = event.keyCode
-                if (kc == KeyEvent.KEYCODE_DPAD_UP || kc == KeyEvent.KEYCODE_CHANNEL_UP || kc == KeyEvent.KEYCODE_DPAD_DOWN || kc == KeyEvent.KEYCODE_CHANNEL_DOWN)
-                    return onKeyDown(kc, event)
-            }
+        if (event != null && event.action == KeyEvent.ACTION_DOWN) {
+            val kc = event.keyCode
+            if (interceptedKeys.contains(kc))
+                return onKeyDown(kc, event)
         }
         return super.dispatchKeyEvent(event)
     }
@@ -1120,20 +1129,34 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "onKeyDown keyCode=$keyCode action=${event?.action}")
         val step = 10000L
         return when (keyCode) {
+            // 播放列表导航 (keep)
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { playPrevious(); true }
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> { playNext(); true }
+            // 快退 10s (带Toast提示)
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
                 player?.let { it.seekTo(maxOf(0L, it.currentPosition - step)) }
-                true
+                Toast.makeText(this, "<< 10s", Toast.LENGTH_SHORT).show(); true
             }
+            // 快进 10s (带Toast提示)
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                 player?.let { it.seekTo(minOf(it.duration, it.currentPosition + step)) }
-                true
+                Toast.makeText(this, ">> 10s", Toast.LENGTH_SHORT).show(); true
             }
+            // OK/确定 → 暂停/播放
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePause(); true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { resumeVideo(); true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { pauseVideo(); true }
+            KeyEvent.KEYCODE_MEDIA_STOP -> { stopVideo(); true }
+            // MENU 功能菜单
             KeyEvent.KEYCODE_MENU -> { showMainMenu(); true }
+            // SETTINGS 系统设置
+            KeyEvent.KEYCODE_SETTINGS -> { showSettingsMenu(); true }
+            // INFO 关于
             KeyEvent.KEYCODE_INFO -> { openAboutActivity(); true }
-            KeyEvent.KEYCODE_FORWARD_DEL -> { deleteCurrentVideo(); true }
+            // HOME 返回系统桌面
             KeyEvent.KEYCODE_HOME -> { returnToSystemLauncher(); true }
+            // BACK 退出应用
             KeyEvent.KEYCODE_BACK -> { finish(); true }
             else -> super.onKeyDown(keyCode, event)
         }
@@ -1152,17 +1175,256 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMainMenu() {
-        val items = arrayOf("检索视频", "视频信息", "关于", "设为默认桌面", "返回系统桌面")
+        val items = arrayOf(
+            "检索视频",       // 0
+            "视频信息",       // 1
+            "播放列表",       // 2
+            "播放模式",       // 3
+            "循环开关",       // 4
+            "截图",          // 5
+            "显示上传地址",   // 6
+            "设为开机视频",   // 7
+            "关于",          // 8
+            "设为默认桌面",   // 9
+            "删除当前视频",   // 10
+            "返回系统桌面",   // 11
+            "退出应用"       // 12
+        )
         android.app.AlertDialog.Builder(this)
             .setTitle("菜单")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> openSearchActivity()
                     1 -> showVideoInfo()
-                    2 -> openAboutActivity()
-                    3 -> setAsDefaultLauncher()
-                    4 -> returnToSystemLauncher()
+                    2 -> showPlaylistStatus()
+                    3 -> showPlaylistModeMenu()
+                    4 -> {
+                        setLoop(!isLoopEnabled)
+                        Toast.makeText(this, "循环: ${if (isLoopEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
+                    }
+                    5 -> {
+                        val path = takeScreenshot()
+                        Toast.makeText(this, "截图${if (path != null) "成功" else "失败"}", Toast.LENGTH_SHORT).show()
+                    }
+                    6 -> {
+                        val url = getHttpServerUrl()
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("上传地址")
+                            .setMessage("在浏览器中打开:\n$url")
+                            .setPositiveButton("确定", null)
+                            .show()
+                    }
+                    7 -> showSetStartupVideo()
+                    8 -> openAboutActivity()
+                    9 -> showSetDefaultLauncherDialog()
+                    10 -> deleteCurrentVideo()
+                    11 -> returnToSystemLauncher()
+                    12 -> finish()
                 }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showPlaylistStatus() {
+        val items = getPlaylistItems()
+        val size = playlistManager.size
+        val idx = playlistManager.currentItemIndex
+        val mode = when (getPlaylistMode()) {
+            "none" -> "播完停止"
+            "one" -> "单曲循环"
+            "all" -> "全部循环"
+            "shuffle" -> "随机播放"
+            else -> getPlaylistMode()
+        }
+        val status = buildString {
+            appendLine("播放列表: $size 个视频")
+            appendLine("当前: #$idx (${playlistManager.currentItem?.name ?: "无"})")
+            appendLine("模式: $mode")
+            if (items.isNotEmpty()) {
+                appendLine("")
+                for (item in items) {
+                    val mark = if (item["index"] as? Int == idx) ">" else " "
+                    appendLine("$mark #${item["index"]} ${item["name"]}")
+                }
+            }
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("播放列表")
+            .setMessage(status.trimEnd())
+            .setPositiveButton("确定", null)
+            .show()
+    }
+
+    private fun showPlaylistModeMenu() {
+        val modes = arrayOf("全部循环", "单曲循环", "随机播放", "播完停止")
+        val modeValues = arrayOf("2", "1", "3", "0")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("播放模式")
+            .setItems(modes) { _, which ->
+                setPlaylistMode(modeValues[which])
+                Toast.makeText(this, "播放模式: ${modes[which]}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showSetStartupVideo() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val videos = videoScanner?.scanAllVideos() ?: return@launch
+            if (videos.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "没有可用视频", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            val names = videos.map { it.name }.toTypedArray()
+            withContext(Dispatchers.Main) {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("设为开机视频")
+                    .setItems(names) { _, which ->
+                        val video = videos[which]
+                        val ext = video.name.substringAfterLast('.', "mp4")
+                        val newName = "hello.$ext"
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val fileManager = FileManager(this@MainActivity)
+                            val success = fileManager.renameFile(video.path, newName)
+                            withContext(Dispatchers.Main) {
+                                if (success) {
+                                    reloadVideos()
+                                    Toast.makeText(this@MainActivity, "已设为开机视频", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(this@MainActivity, "设置失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
+    }
+
+    // --- Settings Menu ---
+    private fun showSettingsMenu() {
+        val items = arrayOf(
+            "定时开机",       // 0
+            "定时关机",       // 1
+            "清除定时",       // 2
+            "电源管理",       // 3
+            "显示模式",       // 4
+            "显示信息",       // 5
+            "恢复默认设置"    // 6
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle("设置")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showTimePickerDialog("定时开机") { time ->
+                        schedulePowerOn(time)
+                        Toast.makeText(this, "定时开机: $time", Toast.LENGTH_SHORT).show()
+                    }
+                    1 -> showTimePickerDialog("定时关机") { time ->
+                        schedulePowerOff(time)
+                        Toast.makeText(this, "定时关机: $time", Toast.LENGTH_SHORT).show()
+                    }
+                    2 -> {
+                        scheduleClear()
+                        schedulePowerClear()
+                        Toast.makeText(this, "已清除所有定时", Toast.LENGTH_SHORT).show()
+                    }
+                    3 -> showPowerMenu()
+                    4 -> showColorModeMenu()
+                    5 -> showDisplayInfoDialog()
+                    6 -> showResetSettingsDialog()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showTimePickerDialog(title: String, onConfirm: (String) -> Unit) {
+        val cal = java.util.Calendar.getInstance()
+        val initialHour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val initialMinute = cal.get(java.util.Calendar.MINUTE)
+        val timePicker = android.widget.TimePicker(this).apply {
+            setIs24HourView(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                hour = initialHour
+                minute = initialMinute
+            } else {
+                @Suppress("DEPRECATION")
+                currentHour = initialHour
+                @Suppress("DEPRECATION")
+                currentMinute = initialMinute
+            }
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(timePicker)
+            .setPositiveButton("确定") { _, _ ->
+                val h = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) timePicker.hour
+                        else @Suppress("DEPRECATION") timePicker.currentHour
+                val m = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) timePicker.minute
+                        else @Suppress("DEPRECATION") timePicker.currentMinute
+                onConfirm(String.format("%02d:%02d", h, m))
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showPowerMenu() {
+        val items = arrayOf("亮屏", "息屏")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("电源管理")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> powerOn()
+                    1 -> powerOff()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showColorModeMenu() {
+        val modes = arrayOf("默认 (SDR)", "宽色域", "HDR")
+        val modeValues = intArrayOf(0, 1, 2)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("显示模式")
+            .setItems(modes) { _, which ->
+                setColorMode(modeValues[which])
+                Toast.makeText(this, "显示模式: ${modes[which]}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showDisplayInfoDialog() {
+        val info = getDisplayInfo()
+        val text = info.entries.joinToString("\n") { "${it.key}: ${it.value}" }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("显示信息")
+            .setMessage(text)
+            .setPositiveButton("确定", null)
+            .show()
+    }
+
+    private fun showResetSettingsDialog() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("恢复默认设置")
+            .setMessage("将清除所有设置并重新扫描视频?")
+            .setPositiveButton("确定") { _, _ ->
+                prefs.edit().clear().apply()
+                videoScanner?.invalidateCache()
+                reloadVideos()
+                isLoopEnabled = true
+                playbackSpeed = 1.0f
+                scheduleStartTime = null
+                scheduleStopTime = null
+                powerOnTime = null
+                powerOffTime = null
+                Toast.makeText(this, "已恢复默认设置", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -1248,11 +1510,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteCurrentVideo() {
         val videoPath = currentVideoPath ?: return
+        val fileManager = FileManager(this)
+        if (!fileManager.canDeleteFile(videoPath)) {
+            val name = videoPath.substringAfterLast("/")
+            if (!videoPath.contains("/emulated/")) {
+                Toast.makeText(this, "外部存储文件不可删除 (仅可删除播放器写入的文件)", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "删除失败: 无权限", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         android.app.AlertDialog.Builder(this)
             .setTitle("删除视频")
             .setMessage("确定删除?\n${videoPath.substringAfterLast("/")}")
             .setPositiveButton("删除") { _, _ ->
-                if (File(videoPath).delete()) {
+                if (fileManager.deleteFile(videoPath)) {
                     Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show()
                     currentVideoPath = null
                     stopVideo()

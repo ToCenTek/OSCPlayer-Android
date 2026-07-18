@@ -14,24 +14,151 @@ import java.io.FileOutputStream
 
 class FileManager(private val context: Context) {
 
+    enum class MediaType { VIDEO, AUDIO, IMAGE }
+
     companion object {
         private const val TAG = "FileManager"
-        private val VIDEO_EXTENSIONS = setOf(
-            "mp4", "mkv", "avi", "mov", "webm", "m4v", "ts", "m2ts",
-            "flv", "wmv", "mpg", "mpeg", "3gp", "ogv"
+        private const val PREFS_WRITTEN = "written_files"
+        private const val KEY_PATHS = "paths"
+
+        val MEDIA_EXTENSIONS = mapOf(
+            MediaType.VIDEO to setOf(
+                "mp4", "mkv", "avi", "mov", "webm", "m4v", "ts", "m2ts",
+                "flv", "wmv", "mpg", "mpeg", "3gp", "ogv", "divx", "vob"
+            ),
+            MediaType.AUDIO to setOf(
+                "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "opus",
+                "ac3", "eac3", "dts", "ape", "wv"
+            ),
+            MediaType.IMAGE to setOf(
+                "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic",
+                "heif", "tiff", "tif", "svg", "ico"
+            )
         )
 
         fun getDefaultDirectory(): String {
             return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
         }
 
-        fun isVideoFile(filename: String): Boolean {
-            if (filename.startsWith(".")) return false
+        fun classifyFile(filename: String): MediaType? {
+            if (filename.startsWith(".")) return null
             val ext = filename.substringAfterLast('.', "").lowercase()
-            return ext in VIDEO_EXTENSIONS
+            for ((type, exts) in MEDIA_EXTENSIONS) {
+                if (ext in exts) return type
+            }
+            return null
+        }
+
+        fun isVideoFile(filename: String): Boolean = classifyFile(filename) == MediaType.VIDEO
+    }
+
+    // --- Written-file tracking ---
+    private val writtenPrefs = context.getSharedPreferences(PREFS_WRITTEN, Context.MODE_PRIVATE)
+
+    fun isWrittenByApp(path: String): Boolean {
+        return writtenPrefs.getStringSet(KEY_PATHS, emptySet())?.contains(path) == true
+    }
+
+    fun markWrittenByApp(path: String) {
+        val set = writtenPrefs.getStringSet(KEY_PATHS, mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+        set.add(path)
+        writtenPrefs.edit().putStringSet(KEY_PATHS, set).apply()
+        Log.d(TAG, "Tracked written file: $path")
+    }
+
+    fun getWrittenFiles(): Set<String> {
+        return writtenPrefs.getStringSet(KEY_PATHS, emptySet()) ?: emptySet()
+    }
+
+    // --- Delete with permission check ---
+    fun canDeleteFile(path: String): Boolean {
+        val file = File(path)
+        if (!file.exists()) return false
+        // Internal storage: always allowed
+        if (path.contains("/emulated/") || path.contains("/sdcard/")) return true
+        // External (USB/SD): only if written by this app
+        return isWrittenByApp(path)
+    }
+
+    fun deleteFile(path: String): Boolean {
+        return try {
+            val file = File(path)
+            if (!file.exists()) {
+                Log.e(TAG, "File not found: $path")
+                return false
+            }
+            if (!canDeleteFile(path)) {
+                Log.w(TAG, "Cannot delete external file not written by app: $path")
+                return false
+            }
+
+            // 1. Try direct delete
+            if (file.delete()) {
+                removeFromWritten(path)
+                return true
+            }
+
+            // 2. Try MediaStore
+            val uri = getVideoMediaStoreUri(path)
+            if (uri != null) {
+                val deleted = context.contentResolver.delete(uri, null, null)
+                if (deleted > 0) {
+                    removeFromWritten(path)
+                    return true
+                }
+            }
+
+            // 3. On external, try rename trick
+            val parent = file.parentFile
+            if (parent != null && !parent.absolutePath.contains("/emulated/")) {
+                val trashFile = File(parent, ".trash_${file.name}")
+                if (file.renameTo(trashFile)) {
+                    trashFile.delete()
+                    if (!trashFile.exists()) {
+                        removeFromWritten(path)
+                        return true
+                    }
+                    trashFile.renameTo(file)
+                }
+            }
+
+            Log.e(TAG, "Delete failed: $path")
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "Delete exception: ${e.message}")
+            false
         }
     }
 
+    private fun removeFromWritten(path: String) {
+        val set = writtenPrefs.getStringSet(KEY_PATHS, mutableSetOf())?.toMutableSet() ?: mutableSetOf()
+        if (set.remove(path)) {
+            writtenPrefs.edit().putStringSet(KEY_PATHS, set).apply()
+        }
+    }
+
+    private fun getVideoMediaStoreUri(filePath: String): Uri? {
+        return try {
+            val projection = arrayOf(MediaStore.Video.Media._ID)
+            val selection = MediaStore.Video.Media.DATA + "=?"
+            val selectionArgs = arrayOf(filePath)
+            context.contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection, selection, selectionArgs, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(0)
+                    return Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id.toString())
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaStore lookup failed: ${e.message}")
+            null
+        }
+    }
+
+    // --- Copy to internal ---
     fun copyToInternal(sourcePath: String, targetDir: String = getDefaultDirectory()): Boolean {
         return try {
             val sourceFile = File(sourcePath)
@@ -69,19 +196,16 @@ class FileManager(private val context: Context) {
         }
     }
 
+    // --- USB storage detection ---
     fun getUSBStorages(): List<File> {
         val checked = mutableSetOf<String>()
         val result = mutableListOf<File>()
 
-        // 1. Try StorageManager (API 24+) for reliable volume detection
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {
                 val sm = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-                val volumes = sm.storageVolumes
-                for (vol in volumes) {
-                    val isEmulated = vol.isEmulated
-                    val isPrimary = vol.isPrimary
-                    if (!isEmulated && !isPrimary) {
+                for (vol in sm.storageVolumes) {
+                    if (!vol.isEmulated && !vol.isPrimary) {
                         val path = try {
                             val mGetPath = StorageVolume::class.java.getMethod("getPath")
                             mGetPath.invoke(vol) as? String
@@ -96,19 +220,17 @@ class FileManager(private val context: Context) {
             }
         }
 
-        // 2. Fallback: scan common mount points
         val candidates = listOf("/storage", "/mnt/media_rw", "/mnt/usb_storage",
             "/mnt/external_sd", "/mnt/extsd")
         for (base in candidates) {
             val dir = File(base)
             if (dir.exists() && dir.isDirectory) {
                 dir.listFiles()?.forEach { file ->
-                    val name = file.name
-                    if (file.isDirectory && !name.contains("emulated") && !name.contains("self")
-                        && name != "sdcard0" && name != "primary") {
-                        if (checked.add(file.absolutePath)) {
-                            result.add(file)
-                        }
+                    if (file.isDirectory && !file.name.contains("emulated")
+                        && !file.name.contains("self") && file.name != "primary"
+                        && file.name != "sdcard0"
+                        && checked.add(file.absolutePath)) {
+                        result.add(file)
                     }
                 }
             }
@@ -117,6 +239,7 @@ class FileManager(private val context: Context) {
         return result
     }
 
+    // --- Copy to USB with tracking ---
     fun copyToUSB(sourcePath: String): Boolean {
         val sourceFile = File(sourcePath)
         if (!sourceFile.exists()) {
@@ -127,58 +250,110 @@ class FileManager(private val context: Context) {
         val usbDir = usbDirs.firstOrNull { it.canWrite() || it.listFiles() != null }
             ?: usbDirs.firstOrNull()
             ?: run {
-            Log.e(TAG, "No writable USB storage found")
-            return false
+                Log.e(TAG, "No USB storage found")
+                return false
+            }
+
+        val name = sourceFile.name.substringBeforeLast('.')
+        val ext = sourceFile.name.substringAfterLast('.', "")
+        var destFile = File(usbDir, sourceFile.name)
+        var idx = 1
+        while (destFile.exists()) {
+            val newName = "${name}_${idx}.${ext}"
+            destFile = File(usbDir, newName)
+            idx++
         }
-        val destFile = File(usbDir, sourceFile.name)
-        // 1. Try normal Java copy
+
+        // 1. Try direct Java copy
         try {
             FileInputStream(sourceFile).use { input ->
                 FileOutputStream(destFile).use { output ->
                     input.copyTo(output)
                 }
             }
+            markWrittenByApp(destFile.absolutePath)
             Log.d(TAG, "Copied to USB: ${destFile.absolutePath}")
             return true
         } catch (e: Exception) {
-            Log.w(TAG, "Normal USB copy failed: ${e.message}, trying root...")
+            Log.w(TAG, "Normal copy failed: ${e.message}")
         }
-        // 2. Fallback: root-based copy (rooted devices)
-        return rootCopy(sourcePath, destFile.absolutePath)
+
+        // 2. Try root copy via su shell
+        if (rootCopy(sourceFile.absolutePath, destFile.absolutePath)) {
+            markWrittenByApp(destFile.absolutePath)
+            return true
+        }
+
+        // 3. Try chmod + Java copy via root (make USB writable once)
+        if (makeUsbWritable(usbDir.absolutePath)) {
+            try {
+                FileInputStream(sourceFile).use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                markWrittenByApp(destFile.absolutePath)
+                Log.d(TAG, "Copy to USB after chmod: ${destFile.absolutePath}")
+                return true
+            } catch (e: Exception) {
+                Log.e(TAG, "Copy after chmod still failed: ${e.message}")
+            }
+        }
+
+        return false
     }
 
-    private fun rootCopy(source: String, dest: String): Boolean {
-        // 1. Try piped stdin approach (avoids su dialog on some devices)
+    private fun makeUsbWritable(usbPath: String): Boolean {
         return try {
-            val proc = Runtime.getRuntime().exec(arrayOf("su"))
-            val os = java.io.DataOutputStream(proc.outputStream)
-            os.writeBytes("cp \"$source\" \"$dest\"\n")
-            os.writeBytes("exit\n")
-            os.flush()
-            val done = proc.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)
-            if (!done) {
-                proc.destroy()
-                // 2. Fallback: try with -c flag
-                val proc2 = Runtime.getRuntime().exec(arrayOf("su", "-c", "cp \"$source\" \"$dest\""))
-                val done2 = proc2.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
-                if (!done2) { proc2.destroy(); return false }
-                if (proc2.exitValue() == 0) { Log.d(TAG, "Root copy success"); return true }
-                Log.e(TAG, "Root copy failed: ${proc2.exitValue()}")
-                return false
-            }
-            if (proc.exitValue() == 0) {
-                Log.d(TAG, "Root copy success")
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "chmod 777 \"$usbPath\""))
+            val done = proc.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+            if (done && proc.exitValue() == 0) {
+                Log.d(TAG, "USB dir made writable: $usbPath")
                 true
             } else {
-                Log.e(TAG, "Root copy failed: ${proc.exitValue()}")
+                Log.w(TAG, "chmod failed or timed out")
                 false
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Root copy exception: ${e.message}")
+            Log.e(TAG, "chmod exception: ${e.message}")
             false
         }
     }
 
+    private fun rootCopy(source: String, dest: String): Boolean {
+        // Approach 1: su -c with small timeout, stdin from /dev/null
+        try {
+            val pb = ProcessBuilder("su", "-c", "cp \"$source\" \"$dest\"")
+            pb.redirectErrorStream(true)
+            pb.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+            val proc = pb.start()
+            val done = proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+            if (done && proc.exitValue() == 0) {
+                Log.d(TAG, "Root copy (approach 1) success")
+                return true
+            }
+            proc.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Root copy approach 1 failed: ${e.message}")
+        }
+
+        // Approach 2: cat source > dest via su
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "cat \"$source\" > \"$dest\""))
+            val done = proc.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+            if (done && proc.exitValue() == 0) {
+                Log.d(TAG, "Root copy (approach 2) success")
+                return true
+            }
+            proc.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "Root copy approach 2 failed: ${e.message}")
+        }
+
+        return false
+    }
+
+    // --- Rename ---
     fun renameFile(oldPath: String, newName: String): Boolean {
         return try {
             val oldFile = File(oldPath)
@@ -190,72 +365,59 @@ class FileManager(private val context: Context) {
         }
     }
 
-    fun deleteFile(path: String): Boolean {
-        return try {
-            val file = File(path)
-            if (!file.exists()) {
-                Log.e(TAG, "File not found: $path")
-                return false
-            }
+    // --- Scan media files ---
+    data class MediaItem(
+        val name: String,
+        val path: String,
+        val size: Long,
+        val mediaType: MediaType,
+        val isFromUSB: Boolean
+    )
 
-            // 1. Try direct File.delete() (works on internal with WRITE_EXTERNAL_STORAGE)
-            if (file.delete()) return true
+    fun getMediaFiles(dirPath: String, mediaTypes: Set<MediaType> = MediaType.values().toSet()): List<MediaItem> {
+        val result = mutableListOf<MediaItem>()
+        scanMediaRecursive(File(dirPath), result, mediaTypes, isUSB = false, depth = 0)
+        return result.sortedByDescending { it.size }
+    }
 
-            // 2. Try MediaStore ContentResolver (works on most external storage)
-            val videoUri = getVideoMediaStoreUri(path)
-            if (videoUri != null) {
-                val deleted = context.contentResolver.delete(videoUri, null, null)
-                if (deleted > 0) {
-                    Log.d(TAG, "Deleted via MediaStore: $path")
-                    return true
-                }
-            }
+    fun getUSBMediaFiles(mediaTypes: Set<MediaType> = MediaType.values().toSet()): List<MediaItem> {
+        val result = mutableListOf<MediaItem>()
+        for (usbDir in getUSBStorages()) {
+            scanMediaRecursive(usbDir, result, mediaTypes, isUSB = true, depth = 0)
+        }
+        return result.sortedByDescending { it.size }
+    }
 
-            // 3. If on external storage, also try raw file with different approach
-            val parent = file.parentFile
-            if (parent != null && !parent.absolutePath.contains("/emulated/")) {
-                // Try to rename first (some devices allow rename but not delete)
-                val trashFile = File(parent, ".trash_${file.name}")
-                if (file.renameTo(trashFile)) {
-                    trashFile.delete()
-                    if (!trashFile.exists()) {
-                        Log.d(TAG, "Deleted via rename+delete: $path")
-                        return true
+    private fun scanMediaRecursive(
+        dir: File,
+        list: MutableList<MediaItem>,
+        mediaTypes: Set<MediaType>,
+        isUSB: Boolean,
+        depth: Int
+    ) {
+        if (depth > 8) return
+        try {
+            val files = dir.listFiles() ?: return
+            for (file in files) {
+                if (file.isDirectory) {
+                    if (!file.name.startsWith(".") && !file.name.startsWith("Android")
+                        && !file.name.equals("System", ignoreCase = true)
+                        && !file.name.equals("LOST.DIR", ignoreCase = true)) {
+                        scanMediaRecursive(file, list, mediaTypes, isUSB, depth + 1)
                     }
-                    // rename back if delete failed
-                    trashFile.renameTo(file)
+                } else if (file.isFile) {
+                    val type = classifyFile(file.name) ?: continue
+                    if (type in mediaTypes) {
+                        list.add(MediaItem(file.name, file.absolutePath, file.length(), type, isUSB))
+                    }
                 }
             }
-
-            Log.e(TAG, "Delete failed (no permission): $path")
-            false
         } catch (e: Exception) {
-            Log.e(TAG, "Delete failed: ${e.message}")
-            false
+            Log.w(TAG, "Scan error ${dir.absolutePath}: ${e.message}")
         }
     }
 
-    private fun getVideoMediaStoreUri(filePath: String): Uri? {
-        return try {
-            val projection = arrayOf(MediaStore.Video.Media._ID)
-            val selection = MediaStore.Video.Media.DATA + "=?"
-            val selectionArgs = arrayOf(filePath)
-            context.contentResolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                projection, selection, selectionArgs, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val id = cursor.getLong(0)
-                    return Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id.toString())
-                }
-            }
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "MediaStore lookup failed: ${e.message}")
-            null
-        }
-    }
-
+    // --- Compatibility: get only video files ---
     fun getVideos(dirPath: String): List<VideoScanner.VideoItem> {
         val videos = mutableListOf<VideoScanner.VideoItem>()
         val dir = File(dirPath)
@@ -266,7 +428,8 @@ class FileManager(private val context: Context) {
                         name = file.name,
                         path = file.absolutePath,
                         size = file.length(),
-                        isFromUSB = false
+                        isFromUSB = false,
+                        mediaType = "video"
                     ))
                 }
             }
