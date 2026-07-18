@@ -16,7 +16,7 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 - 定时播放/停止
 - 显示器电源定时开关
 - 看门狗 (自动检测卡顿并恢复)
-- 截图 (MediaMetadataRetriever OPTION_CLOSEST, 暂停播放器避免解码器冲突; 回退 PixelCopy/decorView; 保存到 /Movies/.screenshots/)
+- 截图 (TextureView.getBitmap(), 不碰硬件解码器, 无黑屏无闪屏; 回退 PixelCopy/decorView; 保存到 /Movies/.screenshots/)
 - 全屏沉浸式播放
 - HTTP 文件管理 (端口 8080): 上传/播放/暂停/下载/删除/信息查看
 - HTTP 截图画廊: 缩略图网格 + 全屏查看/下载/删除, HTTP GET `/screenshot` 触发截图
