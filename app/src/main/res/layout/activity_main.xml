@@ -10,7 +10,8 @@
         android:layout_height="match_parent"
         app:use_controller="false"
         app:show_buffering="when_playing"
-        app:surface_type="texture_view"
+        app:surface_type="surface_view"
+        app:resize_mode="fill"
         xmlns:app="http://schemas.android.com/apk/res-auto" />
 
     <TextView

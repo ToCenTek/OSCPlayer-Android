@@ -16,7 +16,24 @@ class AboutActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.aboutPort).text = OSCServer.getPort().toString()
         findViewById<TextView>(R.id.aboutIP).text = getLocalIPAddress() ?: "未知"
-        findViewById<TextView>(R.id.aboutCommands).text = buildCommandHelp()
+
+        matchLogoWidthToTitle()
+    }
+
+    private fun matchLogoWidthToTitle() {
+        val logo = findViewById<android.widget.ImageView>(R.id.aboutLogo)
+        val title = findViewById<TextView>(R.id.aboutTitle)
+        logo.post {
+            val tw = title.paint.measureText(title.text.toString()).toInt()
+            val d = logo.drawable
+            if (d != null && tw > 0) {
+                val aspect = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
+                val lp = logo.layoutParams
+                lp.width = tw
+                lp.height = (tw / aspect).toInt()
+                logo.layoutParams = lp
+            }
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -25,42 +42,6 @@ class AboutActivity : AppCompatActivity() {
             return true
         }
         return super.onKeyDown(keyCode, event)
-    }
-
-    private fun buildCommandHelp(): String {
-        return buildString {
-            appendLine("播放控制")
-            appendLine("  /play[name]      播放视频")
-            appendLine("  /stop[/t|f]     停止 / 关机 / 重启")
-            appendLine("  /pause[/0|1]    暂停 / 恢复")
-            appendLine("  /volume/0-1     音量")
-            appendLine("  /seek/s         跳转")
-            appendLine("  /speed/0.25-4   速度")
-            appendLine()
-            appendLine("文件管理")
-            appendLine("  /rm/name        删除")
-            appendLine("  /rename/old/new 重命名")
-            appendLine("  /cp/tousb/name  拷贝到USB")
-            appendLine("  /cp/tointernal  从USB拷贝")
-            appendLine()
-            appendLine("播放列表 / 显示")
-            appendLine("  /playlist/...   add/remove/next/prev")
-            appendLine("  /tct/text/size  文字叠加")
-            appendLine("  /screenshot     截图")
-            appendLine()
-            appendLine("配置 / 定时")
-            appendLine("  /config/...     dir/watchdog/startup")
-            appendLine("  /schedule/...   start/stop/clear")
-            appendLine("  /power/on|off   显示器电源")
-            appendLine()
-            appendLine("信息 / 系统")
-            appendLine("  /info[/name]    视频信息")
-            appendLine("  /status         完整状态")
-            appendLine("  /list/videos    视频列表")
-            appendLine("  /list/external  外置存储列表")
-            appendLine("  /fps [/n]       帧率")
-            appendLine("  /launcher       返回桌面")
-        }.trimEnd()
     }
 
     private fun getLocalIPAddress(): String? {

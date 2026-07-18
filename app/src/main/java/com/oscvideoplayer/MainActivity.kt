@@ -39,6 +39,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Calendar
@@ -93,6 +94,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_POWER_OFF = "power_off_time"
         private const val NSD_SERVICE_TYPE = "_osc._udp."
         private const val NSD_SERVICE_PORT = 8000
+        @Volatile
+        var activeVideoPath: String? = null
         val interceptedKeys = setOf(
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN,
@@ -107,7 +110,8 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_F7, KeyEvent.KEYCODE_F8, KeyEvent.KEYCODE_F9,
             KeyEvent.KEYCODE_F10, KeyEvent.KEYCODE_F11, KeyEvent.KEYCODE_F12,
             KeyEvent.KEYCODE_INFO,
-            KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK
+            KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK,
+            KeyEvent.KEYCODE_VOLUME_MUTE
         )
     }
 
@@ -190,6 +194,8 @@ class MainActivity : AppCompatActivity() {
         registerNsdService()
 
         startHttpUploadServer()
+
+        tryAutoSetDefaultLauncher()
 
         isLoopEnabled = prefs.getBoolean(KEY_LOOP_ENABLED, true)
 
@@ -441,6 +447,10 @@ class MainActivity : AppCompatActivity() {
                         override fun onPlaybackParametersChanged(parms: androidx.media3.common.PlaybackParameters) {
                             playbackSpeed = parms.speed
                         }
+
+                        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                            Log.d(TAG, "VideoSize: ${videoSize.width}x${videoSize.height} unapplied=${videoSize.unappliedRotationDegrees}")
+                        }
                     })
                 }
             playerView?.player = player
@@ -500,7 +510,8 @@ class MainActivity : AppCompatActivity() {
                 getVideoInfoProvider = { path -> getFileInfo(path) },
                 togglePlayPauseProvider = { runOnUiThread { togglePlayPause() } },
                 isPlayingProvider = { cachedIsPlaying },
-                currentVideoPathProvider = { currentVideoPath }
+                currentVideoPathProvider = { activeVideoPath },
+                screenshotProvider = { takeScreenshot() }
             )
             httpUploadServer?.start()
             Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")
@@ -592,6 +603,7 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             switchingVideo = true
             currentVideoPath = path
+            activeVideoPath = path
             saveLastVideo(path)
             Log.d(TAG, "playVideo: $path")
 
@@ -682,6 +694,20 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread { player?.volume = volume.coerceIn(0f, 1f) }
     }
 
+    fun toggleMute() {
+        runOnUiThread {
+            val p = player ?: return@runOnUiThread
+            if (p.volume > 0f) {
+                cachedVolume = p.volume
+                p.volume = 0f
+                Toast.makeText(this, "静音", Toast.LENGTH_SHORT).show()
+            } else {
+                p.volume = cachedVolume.coerceIn(0f, 1f)
+                Toast.makeText(this, "音量: ${(p.volume * 100).toInt()}%", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun setLoop(enabled: Boolean) {
         isLoopEnabled = enabled
         prefs.edit().putBoolean(KEY_LOOP_ENABLED, enabled).apply()
@@ -712,14 +738,25 @@ class MainActivity : AppCompatActivity() {
         var audioSampleRate = 0; var channelCount = 2
         val filename = currentVideoPath?.substringAfterLast("/") ?: ""
 
+        // Use ExoPlayer's rendered size first (accurate on all devices)
+        player?.let { p ->
+            val vs = p.videoSize
+            if (vs != null && vs.width > 0 && vs.height > 0) {
+                width = vs.width
+                height = vs.height
+            }
+        }
+
         currentVideoPath?.let { path ->
             try {
                 val file = File(path)
                 if (file.exists()) fileSize = file.length()
                 val retriever = MediaMetadataRetriever()
                 retriever.setDataSource(path)
-                width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                if (width == 0) {
+                    width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                    height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                }
                 duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                 frameRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull() ?: 30.0
                 videoBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
@@ -752,13 +789,18 @@ class MainActivity : AppCompatActivity() {
         val dm = DisplayMetrics()
         windowManager.defaultDisplay.getRealMetrics(dm)
         val display = windowManager.defaultDisplay
-        val hdrCaps = display.hdrCapabilities
+        val hdrTypes = if (Build.VERSION.SDK_INT >= 24) {
+            try { display.hdrCapabilities?.supportedHdrTypes?.joinToString(",") } catch (_: Exception) { null }
+        } else null
+        val vs = player?.videoSize
         return mapOf<String, Any>(
-            "width" to dm.widthPixels,
-            "height" to dm.heightPixels,
+            "displayWidth" to dm.widthPixels,
+            "displayHeight" to dm.heightPixels,
             "refreshRate" to display.refreshRate,
-            "hdrTypes" to (hdrCaps?.supportedHdrTypes?.joinToString(",") ?: "none"),
-            "colorMode" to (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) window.colorMode else 0)
+            "hdrTypes" to (hdrTypes ?: "none"),
+            "colorMode" to (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) window.colorMode else 0),
+            "renderWidth" to (vs?.width ?: 0),
+            "renderHeight" to (vs?.height ?: 0)
         )
     }
 
@@ -1122,49 +1164,258 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "Power schedule cleared")
     }
 
-    fun takeScreenshot(onDone: ((String?) -> Unit)? = null) {
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            try {
-                val view = window.decorView
-                if (view.width <= 0 || view.height <= 0) {
-                    Log.w(TAG, "View not ready for screenshot")
-                    onDone?.invoke(null)
-                    return@post
-                }
-                val bitmap = android.graphics.Bitmap.createBitmap(
-                    view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888
-                )
-                val canvas = android.graphics.Canvas(bitmap)
-
-                val textureView = playerView?.let { findTextureView(it) }
-                val videoBitmap = textureView?.bitmap
-                if (videoBitmap != null && !videoBitmap.isRecycled) {
-                    canvas.drawBitmap(videoBitmap, 0f, 0f, null)
-                } else {
-                    view.draw(canvas)
-                }
-
-                val path = saveScreenshotBitmap(bitmap)
-                bitmap.recycle()
-                onDone?.invoke(path)
-            } catch (e: Exception) {
-                Log.e(TAG, "Screenshot error: ${e.message}")
-                onDone?.invoke(null)
+    private fun isAllBlack(bmp: android.graphics.Bitmap): Boolean {
+        // sample 20 pixels spread across the frame
+        // check if they are literally black (all zeroes or full black)
+        val stepX = maxOf(1, bmp.width / 5)
+        val stepY = maxOf(1, bmp.height / 4)
+        var blackCount = 0
+        var total = 0
+        for (y in 0 until bmp.height step stepY) {
+            for (x in 0 until bmp.width step stepX) {
+                val p = bmp.getPixel(x, y)
+                total++
+                val a = android.graphics.Color.alpha(p)
+                val r = android.graphics.Color.red(p)
+                val g = android.graphics.Color.green(p)
+                val b = android.graphics.Color.blue(p)
+                if (a == 0 || (r == 0 && g == 0 && b == 0)) blackCount++
             }
+        }
+        return total > 0 && blackCount == total
+    }
+    private fun decodeFrameDirect(path: String): android.graphics.Bitmap? {
+        var extractor: android.media.MediaExtractor? = null
+        var codec: android.media.MediaCodec? = null
+        var reader: android.media.ImageReader? = null
+        try {
+            extractor = android.media.MediaExtractor()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                extractor.setDataSource(path)
+            } else {
+                extractor.setDataSource(path)
+            }
+            val trackIndex = (0 until extractor.trackCount).firstOrNull { i ->
+                val f = extractor.getTrackFormat(i)
+                f.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            } ?: return null
+            extractor.selectTrack(trackIndex)
+            val format = extractor.getTrackFormat(trackIndex)
+            val w = format.getInteger(android.media.MediaFormat.KEY_WIDTH)
+            val h = format.getInteger(android.media.MediaFormat.KEY_HEIGHT)
+            if (w <= 0 || h <= 0) return null
+
+            reader = android.media.ImageReader.newInstance(w, h, android.graphics.ImageFormat.YUV_420_888, 2)
+            val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: "video/avc"
+            codec = android.media.MediaCodec.createDecoderByType(mime)
+            codec.configure(format, reader.surface, null, 0)
+            codec.start()
+
+            val timeout = 10000L
+            var frameDecoded = false
+            var bitmap: android.graphics.Bitmap? = null
+            var attempts = 0
+
+            while (!frameDecoded && attempts < 30) {
+                attempts++
+                // feed input
+                val inIdx = codec.dequeueInputBuffer(timeout)
+                if (inIdx >= 0) {
+                    val buf = codec.getInputBuffer(inIdx)!!
+                    val sampleSize = extractor.readSampleData(buf, 0)
+                    if (sampleSize < 0) {
+                        codec.queueInputBuffer(inIdx, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    } else {
+                        codec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
+                        extractor.advance()
+                    }
+                }
+                // drain output
+                val info = android.media.MediaCodec.BufferInfo()
+                var outIdx = codec.dequeueOutputBuffer(info, timeout)
+                if (outIdx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    outIdx = codec.dequeueOutputBuffer(info, timeout)
+                }
+                if (outIdx >= 0) {
+                    codec.releaseOutputBuffer(outIdx, true) // render to surface
+                    frameDecoded = true
+                }
+                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+            }
+
+            if (frameDecoded) {
+                Thread.sleep(100) // wait for ImageReader
+                val image = reader.acquireLatestImage()
+                if (image != null) {
+                    bitmap = yuv420888ToBitmap(image, w, h)
+                    image.close()
+                }
+            }
+            return bitmap
+        } catch (e: Exception) {
+            Log.e(TAG, "decodeFrameDirect error: ${e.message}")
+            return null
+        } finally {
+            codec?.stop(); codec?.release()
+            extractor?.release()
+            reader?.close()
         }
     }
 
-    private fun findTextureView(parent: android.view.ViewGroup): android.view.TextureView? {
-        for (i in 0 until parent.childCount) {
-            val child = parent.getChildAt(i)
-            when {
-                child is android.view.TextureView -> return child
-                child is android.view.ViewGroup -> {
-                    findTextureView(child)?.let { return it }
+    private fun yuv420888ToBitmap(image: android.media.Image, w: Int, h: Int): android.graphics.Bitmap {
+        val planes = image.planes
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        val yBuf = java.nio.ByteBuffer.allocate(w * h)
+        val uvBuf = java.nio.ByteBuffer.allocate(w * h / 2)
+
+        // copy Y plane
+        val yRowStride = yPlane.rowStride
+        val yPixStride = yPlane.pixelStride
+        val ySrc = yPlane.buffer
+        ySrc.position(0)
+        if (yPixStride == 1) {
+            for (row in 0 until h) {
+                ySrc.position(row * yRowStride)
+                ySrc.get(yBuf.array(), row * w, w)
+            }
+        } else {
+            for (row in 0 until h) {
+                var srcPos = row * yRowStride
+                for (col in 0 until w) {
+                    yBuf.put(ySrc.get(srcPos))
+                    srcPos += yPixStride
                 }
             }
         }
-        return null
+
+        // copy UV planes (NV21 format: V...U... interleaved)
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane.rowStride
+        val uPixStride = uPlane.pixelStride
+        val vPixStride = vPlane.pixelStride
+        val uSrc = uPlane.buffer
+        val vSrc = vPlane.buffer
+        uSrc.position(0); vSrc.position(0)
+        val uvSize = w * h / 4
+        for (row in 0 until h / 2) {
+            val uPos = row * uRowStride
+            val vPos = row * vRowStride
+            for (col in 0 until w / 2) {
+                uvBuf.put(vSrc.get(vPos + col * vPixStride)) // V first for NV21
+                uvBuf.put(uSrc.get(uPos + col * uPixStride)) // U second
+            }
+        }
+
+        val yuv = ByteArray(w * h * 3 / 2)
+        yBuf.position(0); yBuf.get(yuv, 0, w * h)
+        uvBuf.position(0); uvBuf.get(yuv, w * h, w * h / 2)
+
+        val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.RGB_565)
+        val yuvImage = android.graphics.YuvImage(yuv, android.graphics.ImageFormat.NV21, w, h, null)
+        val os = java.io.ByteArrayOutputStream()
+        yuvImage.compressToJpeg(android.graphics.Rect(0, 0, w, h), 90, os)
+        val jpeg = os.toByteArray()
+        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, java.io.ByteArrayOutputStream())
+        return android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+    }
+
+    fun takeScreenshot(onDone: ((String?) -> Unit)? = null) {
+        val currentPath = activeVideoPath
+        if (currentPath != null) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                val pos = withContext(Dispatchers.Main) { player?.currentPosition ?: 0L }
+                // pause player to free hardware decoder for retriever
+                val wasPlaying = withContext(Dispatchers.Main) {
+                    val p = player
+                    if (p?.isPlaying == true) { p.pause(); true } else false
+                }
+                // 1. MediaMetadataRetriever (simple path, works on most devices)
+                var ok = false
+                try {
+                    val retriever = android.media.MediaMetadataRetriever()
+                    retriever.setDataSource(currentPath)
+                    for ((opt, us) in arrayOf(
+                        android.media.MediaMetadataRetriever.OPTION_CLOSEST to pos * 1000,
+                        android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC to pos * 1000,
+                    )) {
+                        val bmp = retriever.getFrameAtTime(us, opt)
+                        if (bmp != null && !isAllBlack(bmp)) {
+                            retriever.release()
+                            val path = saveScreenshotBitmap(bmp)
+                            bmp.recycle()
+                            if (path != null) { ok = true; onDone?.invoke(path) }
+                            break
+                        }
+                    }
+                } catch (_: Exception) {}
+                // resume playback after retriever
+                if (wasPlaying) withContext(Dispatchers.Main) { player?.play() }
+                // 2. PixelCopy from Window (API 26+, best effort on texture_view)
+                if (!ok && Build.VERSION.SDK_INT >= 26) {
+                    val pv = playerView ?: return@launch
+                    try {
+                        val bmp = withContext(Dispatchers.Main) {
+                            val w = pv.width; val h = pv.height
+                            if (w <= 0 || h <= 0) null
+                            else android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                        } ?: return@launch
+                        val success = suspendCancellableCoroutine<Boolean> { cont ->
+                            android.view.PixelCopy.request(window, bmp,
+                                { result ->
+                                    if (result == android.view.PixelCopy.SUCCESS) {
+                                        val path = saveScreenshotBitmap(bmp)
+                                        bmp.recycle()
+                                        if (path != null) { ok = true; onDone?.invoke(path) }
+                                    }
+                                    cont.resume(result == android.view.PixelCopy.SUCCESS, null)
+                                },
+                                android.os.Handler(android.os.Looper.getMainLooper()))
+                            cont.invokeOnCancellation { bmp.recycle() }
+                        }
+                        if (!success) bmp.recycle()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "PixelCopy error: ${e.message}")
+                    }
+                }
+                // 3. decorView fallback
+                if (!ok) {
+                    try {
+                        withContext(Dispatchers.Main) {
+                            val v = window.decorView
+                            if (v.width > 0 && v.height > 0) {
+                                val bmp = android.graphics.Bitmap.createBitmap(
+                                    v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+                                v.draw(android.graphics.Canvas(bmp))
+                                val path = saveScreenshotBitmap(bmp)
+                                bmp.recycle()
+                                onDone?.invoke(path)
+                            } else { onDone?.invoke(null) }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "DecorView screenshot failed: ${e.message}")
+                        onDone?.invoke(null)
+                    }
+                }
+            }
+        } else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    val v = window.decorView
+                    if (v.width <= 0 || v.height <= 0) { onDone?.invoke(null); return@post }
+                    val bmp = android.graphics.Bitmap.createBitmap(
+                        v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+                    v.draw(android.graphics.Canvas(bmp))
+                    val path = saveScreenshotBitmap(bmp)
+                    bmp.recycle()
+                    onDone?.invoke(path)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Screenshot error: ${e.message}")
+                    onDone?.invoke(null)
+                }
+            }
+        }
     }
 
     private fun saveScreenshotBitmap(bitmap: android.graphics.Bitmap): String? {
@@ -1218,6 +1469,7 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_F7, KeyEvent.KEYCODE_F8, KeyEvent.KEYCODE_F9, KeyEvent.KEYCODE_F10,
             KeyEvent.KEYCODE_F11, KeyEvent.KEYCODE_F12 -> { toggleMenu(::showSettingsMenu); true }
             KeyEvent.KEYCODE_INFO -> { openAboutActivity(); true }
+            KeyEvent.KEYCODE_VOLUME_MUTE -> { toggleMute(); true }
             KeyEvent.KEYCODE_HOME -> { returnToSystemLauncher(); true }
             KeyEvent.KEYCODE_BACK -> { finish(); true }
             else -> super.onKeyDown(keyCode, event)
@@ -1270,7 +1522,7 @@ class MainActivity : AppCompatActivity() {
         listView.divider = android.graphics.drawable.ColorDrawable(0x22FFFFFF.toInt())
         listView.dividerHeight = 1
         listView.setPadding(0, 4, 0, 4)
-        listView.setBackgroundColor(0xFF1A1A1A.toInt())
+        listView.setBackgroundColor(0x4C1A1A1A.toInt())
         listView.setSelector(android.graphics.drawable.ColorDrawable(0x44FFCC00.toInt()))
         listView.setOnKeyListener { v, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
@@ -1312,9 +1564,9 @@ class MainActivity : AppCompatActivity() {
 
         menuDialog = android.app.Dialog(this).apply {
             setContentView(root)
-            val w = resources.displayMetrics.widthPixels * 65 / 100
+            val w = resources.displayMetrics.widthPixels * 20 / 100
             window?.setLayout(w, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
-            window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xFF1A1A1A.toInt()))
+            window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x4C1A1A1A.toInt()))
             window?.setGravity(android.view.Gravity.CENTER)
             setCanceledOnTouchOutside(false)
             setOnKeyListener { _, keyCode, event ->
@@ -1343,7 +1595,7 @@ class MainActivity : AppCompatActivity() {
     private fun showMainMenu() {
         showMenuWithWrap("菜单", arrayOf(
             "检索视频",
-            "视频信息",
+            "文件信息",
             "播放列表",
             "播放模式",
             "循环开关",
@@ -1661,7 +1913,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         android.app.AlertDialog.Builder(this)
-            .setTitle("视频信息")
+            .setTitle("文件信息")
             .setMessage(infoText)
             .setPositiveButton("确定", null)
             .show()

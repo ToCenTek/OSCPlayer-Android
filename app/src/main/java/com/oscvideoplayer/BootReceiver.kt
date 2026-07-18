@@ -59,6 +59,7 @@ class AlarmReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AlarmReceiver"
         private const val REQUEST_CODE = 1001
+        private const val INTERVAL_MS = 15_000L
         
         fun schedule(context: Context) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -71,19 +72,27 @@ class AlarmReceiver : BroadcastReceiver() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             
-            // Schedule to run 30 seconds after boot
-            val triggerTime = System.currentTimeMillis() + 30000
-            
             try {
-                alarmManager.setExactAndAllowWhileIdle(
+                alarmManager.setInexactRepeating(
                     AlarmManager.RTC_WAKEUP,
-                    triggerTime,
+                    System.currentTimeMillis() + 30000,
+                    INTERVAL_MS,
                     pendingIntent
                 )
-                Log.d(TAG, "Alarm scheduled at: ${triggerTime}")
+                Log.d(TAG, "Repeating alarm scheduled every ${INTERVAL_MS / 60000}min")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to schedule alarm: ${e.message}")
+                Log.e(TAG, "Failed to schedule repeating alarm: ${e.message}")
             }
+        }
+        
+        fun cancel(context: Context) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(context, AlarmReceiver::class.java)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, REQUEST_CODE, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            alarmManager.cancel(pendingIntent)
         }
     }
     
@@ -92,6 +101,7 @@ class AlarmReceiver : BroadcastReceiver() {
         
         val mainIntent = Intent(context, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra("from_boot", true)
         }
         
         try {
@@ -100,7 +110,5 @@ class AlarmReceiver : BroadcastReceiver() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start MainActivity: ${e.message}")
         }
-        
-        // Don't re-schedule - let BootReceiver handle scheduling next boot
     }
 }

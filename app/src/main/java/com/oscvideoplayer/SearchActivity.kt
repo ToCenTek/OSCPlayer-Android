@@ -279,7 +279,7 @@ class SearchActivity : AppCompatActivity() {
 
             withContext(Dispatchers.Main) {
                 AlertDialog.Builder(this@SearchActivity)
-                    .setTitle("视频信息")
+                    .setTitle("文件信息")
                     .setMessage(info.trimEnd())
                     .setPositiveButton("知道了", null)
                     .show()

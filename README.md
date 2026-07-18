@@ -16,10 +16,11 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 - 定时播放/停止
 - 显示器电源定时开关
 - 看门狗 (自动检测卡顿并恢复)
-- 截图 (TextureView 异步截图, 保存到 /Movies/.screenshots/)
+- 截图 (MediaMetadataRetriever OPTION_CLOSEST, 暂停播放器避免解码器冲突; 回退 PixelCopy/decorView; 保存到 /Movies/.screenshots/)
 - 全屏沉浸式播放
 - HTTP 文件管理 (端口 8080): 上传/播放/暂停/下载/删除/信息查看
-- HTTP 截图画廊: 缩略图网格 + 全屏查看/下载/删除
+- HTTP 截图画廊: 缩略图网格 + 全屏查看/下载/删除, HTTP GET `/screenshot` 触发截图
+- 菜单半透明窄条 (20% 宽度), 截图时可透见画面
 - 双遥控适配: 标准 Menu/Settings/F1-F12 全支持, 菜单开关
 - 前台服务保持 OSC 服务器持续运行
 - WorkManager 每 30 分钟健康检查
@@ -56,6 +57,7 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 | `/files?dl=路径` | 下载文件 |
 | `/files?del=路径` | 删除文件 (USB/SD 禁止删除) |
 | `/files?info=路径` | 文件详细信息 |
+| `/screenshot` | 触发截图并重定向到截图画廊 |
 | `/screenshots` | 截图画廊 (缩略图网格, 全屏查看/下载/删除) |
 | `/screenshots/文件.png` | 返回截图图片文件 |
 | `/screenshots/delete/名称` | 删除截图 |
@@ -108,7 +110,7 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 | `/tct/文字/字号/位置` | 文字叠加 (位置: 0居中,1左上,2右上,3左下,4右下) |
 | `/subtitle/路径` | 加载字幕文件 |
 | `/subtitle/0` | 关闭字幕 |
-| `/screenshot` | 截图 (保存到默认目录/.screenshots/) |
+| `/screenshot` | 截图 (保存到默认目录/.screenshots/; 若 OSC UDP 不可达, 可用 HTTP GET `/screenshot`) |
 
 ### 信息
 | 命令 | 说明 |
@@ -168,7 +170,7 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 - USB/SD 额外扫描音频和图片类型
 - 启动时播放第一个名为 "hello.*" 的视频
 - 默认目录可通过 `/config/dir` 运行时修改
-- 截图保存到 `/storage/emulated/0/Movies/.screenshots/` (隐藏目录, 不进入播放列表)
+- 截图保存到 `/storage/emulated/0/Movies/.screenshots/` (隐藏目录, 不进入播放列表), 截图时自动暂停播放器避免解码器冲突
 - FileObserver 监控默认目录变化, 自动刷新扫描缓存
 
 ## 低端设备兼容

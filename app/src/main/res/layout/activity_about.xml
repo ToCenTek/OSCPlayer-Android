@@ -9,50 +9,45 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="32dp">
+        android:padding="24dp">
 
-        <!-- Header -->
+        <!-- Logo + Title -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:gravity="center"
-            android:paddingTop="48dp"
-            android:paddingBottom="32dp">
+            android:background="#FF1A1A1A"
+            android:padding="24dp"
+            android:layout_marginBottom="16dp">
 
-            <TextView
+            <ImageView
+                android:id="@+id/aboutLogo"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="OSC"
-                android:textSize="56sp"
-                android:textColor="#FFBB86FC"
+                android:adjustViewBounds="true"
+                android:scaleType="fitCenter"
+                android:src="@drawable/logo" />
+
+            <TextView
+                android:id="@+id/aboutTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="OSC Video Player"
+                android:textSize="20sp"
+                android:textColor="#FFFFFF"
                 android:textStyle="bold"
-                android:letterSpacing="0.15" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Video Player"
-                android:textSize="22sp"
-                android:textColor="#FFBB86FC"
-                android:alpha="0.7"
-                android:letterSpacing="0.3" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="v2.0"
-                android:textSize="14sp"
-                android:textColor="#66FFFFFF"
+                android:letterSpacing="0.1"
                 android:layout_marginTop="8dp" />
 
             <TextView
+                android:id="@+id/aboutSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="展览展示 / 数字标牌播放器"
-                android:textSize="13sp"
-                android:textColor="#44FFFFFF"
-                android:layout_marginTop="4dp" />
+                android:text="v2.0  |  展览展示  |  数字标牌"
+                android:textSize="12sp"
+                android:textColor="#66FFFFFF"
+                android:layout_marginTop="2dp" />
         </LinearLayout>
 
         <!-- Network Card -->
@@ -69,7 +64,7 @@
                 android:layout_height="wrap_content"
                 android:text="网络信息"
                 android:textSize="11sp"
-                android:textColor="#FFBB86FC"
+                android:textColor="#FF2FA1D3"
                 android:textStyle="bold"
                 android:letterSpacing="0.12"
                 android:paddingBottom="12dp" />
@@ -102,7 +97,7 @@
                 <TextView
                     android:layout_width="80dp"
                     android:layout_height="wrap_content"
-                    android:text="IP地址"
+                    android:text="地址"
                     android:textColor="#88FFFFFF"
                     android:textSize="13sp" />
                 <TextView
@@ -127,7 +122,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="OSC (UDP)"
+                    android:text="OSC (UDP)  /  HTTP"
                     android:textColor="#FFFFFF"
                     android:textSize="13sp" />
             </LinearLayout>
@@ -147,7 +142,7 @@
                 android:layout_height="wrap_content"
                 android:text="系统信息"
                 android:textSize="11sp"
-                android:textColor="#FFBB86FC"
+                android:textColor="#FF2FA1D3"
                 android:textStyle="bold"
                 android:letterSpacing="0.12"
                 android:paddingBottom="12dp" />
@@ -224,7 +219,7 @@
                 android:layout_height="wrap_content"
                 android:text="核心功能"
                 android:textSize="11sp"
-                android:textColor="#FFBB86FC"
+                android:textColor="#FF2FA1D3"
                 android:textStyle="bold"
                 android:letterSpacing="0.12"
                 android:paddingBottom="12dp" />
@@ -232,66 +227,45 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="&#x2022; OSC 远程控制 (UDP 端口 8000)"
+                android:text="  OSC 远程控制 (UDP 8000 / HTTP 8080)"
                 android:textColor="#CCFFFFFF"
                 android:textSize="13sp"
                 android:paddingBottom="4dp" />
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="&#x2022; 播放列表 / 循环 / 定时开关"
+                android:text="  播放列表 / 循环 / 定时开关"
                 android:textColor="#CCFFFFFF"
                 android:textSize="13sp"
                 android:paddingBottom="4dp" />
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="&#x2022; 播放速度 / 字幕 / 文字叠加"
+                android:text="  播放速度 / 字幕 / 文字叠加"
                 android:textColor="#CCFFFFFF"
                 android:textSize="13sp"
                 android:paddingBottom="4dp" />
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="&#x2022; 截图 / 文件管理 / USB 拷贝"
+                android:text="  截图 / 文件管理 / USB 拷贝"
                 android:textColor="#CCFFFFFF"
                 android:textSize="13sp"
                 android:paddingBottom="4dp" />
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="&#x2022; 看门狗自动恢复 / 开机自启"
+                android:text="  看门狗自动恢复 / 开机自启"
                 android:textColor="#CCFFFFFF"
                 android:textSize="13sp" />
-        </LinearLayout>
-
-        <!-- OSC Commands Card -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="#FF1A1A1A"
-            android:padding="20dp"
-            android:layout_marginBottom="12dp">
-
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="OSC 命令参考"
+                android:text="  更多功能详见 README.md"
+                android:textColor="#55FFFFFF"
                 android:textSize="11sp"
-                android:textColor="#FFBB86FC"
-                android:textStyle="bold"
-                android:letterSpacing="0.12"
-                android:paddingBottom="12dp" />
-
-            <TextView
-                android:id="@+id/aboutCommands"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="加载中..."
-                android:textColor="#AAFFFFFF"
-                android:textSize="12sp"
-                android:lineSpacingExtra="4dp" />
+                android:layout_marginTop="8dp"
+                android:gravity="center" />
         </LinearLayout>
 
         <!-- Footer -->
@@ -300,8 +274,8 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:gravity="center"
-            android:paddingTop="24dp"
-            android:paddingBottom="32dp">
+            android:paddingTop="16dp"
+            android:paddingBottom="24dp">
 
             <TextView
                 android:layout_width="wrap_content"

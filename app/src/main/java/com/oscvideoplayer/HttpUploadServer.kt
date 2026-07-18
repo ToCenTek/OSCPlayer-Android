@@ -18,7 +18,8 @@ class HttpUploadServer(
     private val getVideoInfoProvider: ((String) -> Map<String, Any>)? = null,
     private val togglePlayPauseProvider: (() -> Unit)? = null,
     private val isPlayingProvider: (() -> Boolean)? = null,
-    private val currentVideoPathProvider: (() -> String?)? = null
+    private val currentVideoPathProvider: (() -> String?)? = null,
+    private val screenshotProvider: (() -> Unit)? = null
 ) {
     private val tag = "HttpUploadServer"
     private var serverSocket: ServerSocket? = null
@@ -36,7 +37,11 @@ class HttpUploadServer(
                 Log.d(tag, "HTTP server started on port $port, upload dir: $uploadDir")
                 while (running) {
                     try {
-                        serverSocket!!.accept().use { handleClient(it) }
+                        serverSocket!!.accept().let { socket ->
+                        Thread {
+                            try { handleClient(socket) } finally { socket.close() }
+                        }.apply { isDaemon = true; start() }
+                    }
                     } catch (e: Exception) {
                         if (running) Log.w(tag, "Client error: ${e.message}")
                     }
@@ -81,6 +86,11 @@ class HttpUploadServer(
                 method == "GET" && path == "/" -> serveHtml(client)
                 method == "GET" && path.startsWith("/files") -> serveFiles(client, path)
                 method == "GET" && path.startsWith("/screenshots") -> serveScreenshots(client, path)
+                method == "GET" && path == "/screenshot" -> {
+                    screenshotProvider?.invoke()
+                    val redirect = "HTTP/1.1 302 Found\r\nLocation: /screenshots\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    client.outputStream.write(redirect.toByteArray())
+                }
                 method == "POST" && path == "/upload" -> handleUpload(client, input, headers, contentLength)
                 else -> sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
             }
@@ -456,6 +466,7 @@ btn.onclick=function(){
 <span class=name>$name</span>
 <span class=size>$size</span>
 <span class=actions>
+<a href="javascript:" class="btn info" onclick="showInfo(this)" title="信息"><i style="font-style:italic;font-weight:bold">i</i></a>
 <a href="/screenshots/$name" download class=btn title="下载">&#x2913;</a>
 <a href="/screenshots/delete/$name" class="btn del" title="删除" onclick="return confirm('确定删除 $name ?')">&#x2715;</a>
 </span>
@@ -480,6 +491,7 @@ h1{font-size:22px;color:#fc0;margin-bottom:20px;text-align:center}
 .item .actions{display:flex;gap:2px}
 .item .btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;text-decoration:none;font-size:15px;color:#888;transition:background .2s,color .2s}
 .item .btn:hover{background:rgba(255,255,255,.1);color:#fc0}
+.item .btn.info:hover{color:#5bf}
 .item .btn.del:hover{color:#f44}
 .back{display:block;text-align:center;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6;padding:8px}
 .back:hover{opacity:1}
@@ -496,6 +508,15 @@ h1{font-size:22px;color:#fc0;margin-bottom:20px;text-align:center}
 <h1>&#x1F4F7; 截图</h1>
 <div class=grid id=grid>$items</div>
 <a class=back href="/">&larr; 返回上传</a>
+<div id=infov style="display:none;position:fixed;z-index:1000;inset:0;background:rgba(0,0,0,.7);justify-content:center;align-items:center" onclick="if(event.target==this)closeInfo()">
+<div style="background:#1a1a1a;border-radius:12px;padding:24px 32px;max-width:380px;width:90%;border:1px solid rgba(255,255,255,.1);font-size:14px;line-height:1.8">
+<div style="color:#fc0;font-size:16px;font-weight:bold;margin-bottom:8px">文件信息</div>
+<div id=infoName style="color:#aaa;word-break:break-all;margin-bottom:4px"></div>
+<div id=infoSize style="color:#888"></div>
+<div id=infoDims style="color:#888"></div>
+<div style="text-align:center;margin-top:14px"><button onclick="closeInfo()" style="background:rgba(255,255,255,.08);border:none;color:#ccc;padding:6px 24px;border-radius:6px;cursor:pointer;font-size:13px">关闭</button></div>
+</div>
+</div>
 <div id=viewer onclick="if(event.target==this)closeViewer()">
 <button class=close onclick="closeViewer()">&times;</button>
 <a class=vdl id=vdl href="#" download>下载</a>
@@ -514,64 +535,134 @@ function closeViewer(){
  document.body.style.overflow='';
 }
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeViewer()});
+function showInfo(btn){
+ var item=btn.closest('.item');
+ var img=item.querySelector('img');
+ var name=item.querySelector('.name').textContent;
+ var size=item.querySelector('.size').textContent;
+ var loadIt=function(w,h){
+  document.getElementById('infoName').textContent=name;
+  document.getElementById('infoSize').textContent='大小: '+size;
+  document.getElementById('infoDims').textContent='分辨率: '+w+' x '+h;
+  document.getElementById('infov').style.display='flex';
+ };
+ if(img.naturalWidth&&img.naturalHeight){loadIt(img.naturalWidth,img.naturalHeight);return}
+ var tmp=new Image();
+ tmp.onload=function(){loadIt(tmp.naturalWidth,tmp.naturalHeight)};
+ tmp.src=img.src;
+}
+function closeInfo(){document.getElementById('infov').style.display='none'}
 </script>
 </body></html>"""
         sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache")
     }
 
-    // ────── Upload ──────
+    // ────── Upload (streaming multipart, O(1) memory) ──────
 
     private fun handleUpload(client: Socket, input: InputStream, headers: Map<String, String>, contentLength: Int) {
-        val MAX_BODY = 200 * 1024 * 1024
-        if (contentLength > MAX_BODY) {
+        if (contentLength > Int.MAX_VALUE) {
             input.skip(contentLength.toLong())
-            return sendResponse(client, 413, "Too Large", "text/plain; charset=utf-8", "文件超过200MB限制".toByteArray())
+            return sendResponse(client, 413, "Too Large", "text/plain; charset=utf-8", "文件超过2GB限制".toByteArray())
         }
         val ct = headers["content-type"] ?: return sendResponse(client, 400, "Bad Request", "text/plain; charset=utf-8", "缺少 Content-Type".toByteArray())
         val bIdx = ct.indexOf("boundary=")
         if (bIdx < 0) return sendResponse(client, 400, "Bad Request", "text/plain; charset=utf-8", "缺少 boundary".toByteArray())
         val boundary = ("--" + ct.substring(bIdx + 9).trim()).toByteArray()
-        val body = ByteArray(contentLength)
-        var read = 0
-        while (read < contentLength) {
-            val n = input.read(body, read, contentLength - read)
+
+        try {
+            val firstPart = readPartHeaders(input, boundary, contentLength)
+            if (firstPart == null) return sendResponse(client, 400, "No File", "text/plain; charset=utf-8", "未收到有效文件".toByteArray())
+
+            val filename = parseFilenameFromStr(firstPart.headers)
+            if (filename == null) return sendResponse(client, 400, "No File", "text/plain; charset=utf-8", "未检测到文件名".toByteArray())
+
+            val dest = uniqueFile(File(uploadDir, File(filename).name))
+            val total = streamPartData(input, dest, boundary, firstPart.initialData, firstPart.remaining)
+            if (total <= 0) return sendResponse(client, 400, "No Data", "text/plain; charset=utf-8", "文件内容为空".toByteArray())
+
+            Log.d(tag, "Saved: ${dest.absolutePath} ($total bytes)")
+            sendResponse(client, 200, "OK", "text/plain; charset=utf-8", "上传成功: ${dest.name}".toByteArray())
+        } catch (e: Exception) {
+            Log.e(tag, "Upload error: ${e.message}")
+            sendResponse(client, 500, "Error", "text/plain; charset=utf-8", "上传失败".toByteArray())
+        }
+    }
+
+    private class PartResult(val headers: String, val initialData: ByteArray, val remaining: Int)
+
+    private fun readPartHeaders(input: InputStream, boundary: ByteArray, totalRemaining: Int): PartResult? {
+        var rem = totalRemaining
+        val buf = ByteArray(4096)
+        val acc = java.io.ByteArrayOutputStream()
+        while (rem > 0) {
+            val n = input.read(buf, 0, minOf(buf.size, rem))
             if (n < 0) break
-            read += n
-        }
-        if (read < contentLength) return sendResponse(client, 400, "Incomplete", "text/plain; charset=utf-8", "数据不完整".toByteArray())
-
-        val uploads = mutableListOf<String>()
-        var pos = 0
-        while (true) {
-            val bStart = indexOf(body, boundary, pos)
-            if (bStart < 0) break
-            val bEnd = bStart + boundary.size
-            if (bEnd + 2 <= body.size && body[bEnd] == '-'.code.toByte() && body[bEnd + 1] == '-'.code.toByte()) break
-
-            val hEnd = indexOf(body, crlfcrlf, bEnd)
-            if (hEnd < 0) break
-            val headerStr = body.copyOfRange(bEnd, hEnd).toString(Charsets.UTF_8)
-            val dataStart = hEnd + crlfcrlf.size
-
-            val nextB = indexOf(body, boundary, dataStart)
-            if (nextB < 0) break
-            val dataEnd = nextB - 2
-            val dataLen = if (dataEnd > dataStart) dataEnd - dataStart else 0
-
-            val filename = parseFilenameFromStr(headerStr)
-            if (filename != null && dataLen > 0) {
-                val safeName = File(filename).name
-                val dest = uniqueFile(File(uploadDir, safeName))
-                FileOutputStream(dest).use { it.write(body, dataStart, dataLen) }
-                Log.d(tag, "Saved: ${dest.absolutePath} ($dataLen bytes)")
-                uploads.add(dest.name)
+            rem -= n
+            acc.write(buf, 0, n)
+            val data = acc.toByteArray()
+            // find first boundary
+            val bIdx = indexOf(data, boundary, 0)
+            if (bIdx >= 0) {
+                val afterB = data.copyOfRange(bIdx + boundary.size, data.size)
+                val crlfIdx = indexOf(afterB, crlfcrlf, 0)
+                if (crlfIdx >= 0) {
+                    val headers = afterB.copyOfRange(0, crlfIdx).toString(Charsets.UTF_8)
+                    val initialData = afterB.copyOfRange(crlfIdx + crlfcrlf.size, afterB.size)
+                    return PartResult(headers, initialData, rem + initialData.size)
+                }
+                // headers not complete yet, continue reading
             }
-            pos = nextB + boundary.size
         }
-        if (uploads.isEmpty())
-            sendResponse(client, 400, "No File", "text/plain; charset=utf-8", "未收到有效文件".toByteArray())
-        else
-            sendResponse(client, 200, "OK", "text/plain; charset=utf-8", "上传成功: ${uploads.joinToString(", ")}".toByteArray())
+        return null
+    }
+
+    private fun streamPartData(input: InputStream, dest: File, boundary: ByteArray, initial: ByteArray, remaining: Int): Long {
+        var total = 0L
+        // sliding window: keep last (boundary.size - 1) bytes from previous chunk for overlap detection
+        val window = java.io.ByteArrayOutputStream()
+        window.write(initial)
+
+        dest.outputStream().use { out ->
+            fun flushWindow() {
+                val data = window.toByteArray()
+                val bIdx = indexOf(data, boundary, 0)
+                if (bIdx >= 0) {
+                    val writeLen = if (bIdx >= 2) bIdx - 2 else 0
+                    if (writeLen > 0) out.write(data, 0, writeLen)
+                    total += writeLen
+                    window.reset()
+                    window.write(data, bIdx + boundary.size, data.size - bIdx - boundary.size)
+                }
+            }
+
+            flushWindow()
+
+            val buf = ByteArray(65536)
+            var rem = remaining
+            while (rem > 0) {
+                val n = input.read(buf, 0, minOf(buf.size, rem))
+                if (n < 0) break
+                rem -= n
+                window.write(buf, 0, n)
+                flushWindow()
+            }
+
+            // after reading all data, the last chunk before closing boundary
+            val leftover = window.toByteArray()
+            val closeBoundary = "--".toByteArray()
+            val closeIdx = indexOf(leftover, closeBoundary, 0)
+            if (closeIdx >= 0) {
+                val writeLen = if (closeIdx >= 2) closeIdx - 2 else 0
+                if (writeLen > 0) out.write(leftover, 0, writeLen)
+                total += writeLen
+            } else if (leftover.isNotEmpty()) {
+                // no closing boundary? write everything minus trailing CRLF
+                val writeLen = (leftover.size - 2).coerceAtLeast(0)
+                if (writeLen > 0) out.write(leftover, 0, writeLen)
+                total += writeLen
+            }
+        }
+        return total
     }
 
     private fun uniqueFile(f: File): File {
