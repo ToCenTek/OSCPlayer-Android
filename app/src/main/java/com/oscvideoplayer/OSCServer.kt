@@ -796,8 +796,10 @@ class OSCServer(
             }
 
             "screenshot" -> {
-                val path = mainActivity?.takeScreenshot()
-                response = OSCMessage("/Screenshot", listOf(path ?: "failed"))
+                mainActivity?.takeScreenshot { path ->
+                    sendResponse(OSCMessage("/Screenshot", listOf(path ?: "failed")), client)
+                }
+                return
             }
 
             "upload" -> {

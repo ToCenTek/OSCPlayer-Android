@@ -41,6 +41,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -192,7 +193,10 @@ class SearchActivity : AppCompatActivity() {
             items.add("下载到USB" to { downloadToUSB(video) })
         }
 
-        items.add("删除" to { deleteVideo(video) })
+        // 外部存储文件不可删除
+        if (!video.isFromUSB) {
+            items.add("删除" to { deleteVideo(video) })
+        }
 
         AlertDialog.Builder(this)
             .setTitle(video.name)
@@ -352,9 +356,16 @@ class SearchActivity : AppCompatActivity() {
     }
 
     private fun uploadToInternal(video: VideoScanner.VideoItem) {
+        val dialog = android.app.ProgressDialog(this).apply {
+            setMessage("正在复制到内置存储...")
+            setCancelable(false)
+            setCanceledOnTouchOutside(false)
+            show()
+        }
         lifecycleScope.launch(Dispatchers.IO) {
-            val success = fileManager.copyToInternal(video.path)
+            val success = withContext(NonCancellable) { fileManager.copyToInternal(video.path) }
             withContext(Dispatchers.Main) {
+                dialog.dismiss()
                 if (success) {
                     Toast.makeText(this@SearchActivity, "复制成功", Toast.LENGTH_LONG).show()
                     loadVideos()
@@ -366,23 +377,27 @@ class SearchActivity : AppCompatActivity() {
     }
 
     private fun downloadToUSB(video: VideoScanner.VideoItem) {
+        val usbDirs = fileManager.getUSBStorages()
+        if (usbDirs.isEmpty()) {
+            Toast.makeText(this, "未检测到外置存储设备", Toast.LENGTH_LONG).show()
+            return
+        }
+        val dialog = android.app.ProgressDialog(this).apply {
+            setMessage("正在复制到USB...")
+            setCancelable(false)
+            setCanceledOnTouchOutside(false)
+            show()
+        }
         lifecycleScope.launch(Dispatchers.IO) {
-            val usbDirs = fileManager.getUSBStorages()
-            if (usbDirs.isEmpty()) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SearchActivity, "未检测到外置存储设备", Toast.LENGTH_LONG).show()
-                }
-                return@launch
-            }
-
-            val success = fileManager.copyToUSB(video.path)
+            val success = withContext(NonCancellable) { fileManager.copyToUSB(video.path) }
             withContext(Dispatchers.Main) {
+                dialog.dismiss()
                 if (success) {
                     Toast.makeText(this@SearchActivity, "复制成功", Toast.LENGTH_LONG).show()
                     loadVideos()
                 } else {
-                    val usbPaths = usbDirs.joinToString(", ") { it.absolutePath }
-                    Toast.makeText(this@SearchActivity, "USB写入失败, 请检查USB权限: $usbPaths", Toast.LENGTH_LONG).show()
+                    val paths = usbDirs.joinToString(", ") { it.absolutePath }
+                    Toast.makeText(this@SearchActivity, "USB写入失败, 请检查USB权限: $paths", Toast.LENGTH_LONG).show()
                 }
             }
         }

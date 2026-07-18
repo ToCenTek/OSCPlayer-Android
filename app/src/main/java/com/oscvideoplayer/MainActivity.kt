@@ -48,6 +48,7 @@ class MainActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
+    private var isInitialized = false
     private var oscServer: OSCServer? = null
     private var videoScanner: VideoScanner? = null
     private var playlistManager = PlaylistManager()
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var playbackSpeed = 1.0f
     @Volatile
     private var cachedIsPlaying = false
+    private var switchingVideo = false
     @Volatile
     private var cachedPosition = 0L
     @Volatile
@@ -100,6 +102,10 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY,
             KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP,
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_F1, KeyEvent.KEYCODE_F2, KeyEvent.KEYCODE_F3,
+            KeyEvent.KEYCODE_F4, KeyEvent.KEYCODE_F5, KeyEvent.KEYCODE_F6,
+            KeyEvent.KEYCODE_F7, KeyEvent.KEYCODE_F8, KeyEvent.KEYCODE_F9,
+            KeyEvent.KEYCODE_F10, KeyEvent.KEYCODE_F11, KeyEvent.KEYCODE_F12,
             KeyEvent.KEYCODE_INFO,
             KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_BACK
         )
@@ -169,6 +175,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startApp(playVideoPath: String? = null) {
+        if (isInitialized) { Log.d(TAG, "startApp skipped, already initialized"); return }
+        isInitialized = true
+
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
         videoScanner = VideoScanner(this).also {
@@ -181,12 +190,6 @@ class MainActivity : AppCompatActivity() {
         registerNsdService()
 
         startHttpUploadServer()
-
-        val isFirstLaunch = prefs.getBoolean("first_launch", true)
-        if (isFirstLaunch) {
-            prefs.edit().putBoolean("first_launch", false).apply()
-            tryAutoSetDefaultLauncher()
-        }
 
         isLoopEnabled = prefs.getBoolean(KEY_LOOP_ENABLED, true)
 
@@ -411,7 +414,7 @@ class MainActivity : AppCompatActivity() {
                             cachedPosition = player?.currentPosition ?: 0L
 
                             if (playbackState == Player.STATE_ENDED) {
-                                if (!isLoopEnabled) {
+                                if (!switchingVideo && !isLoopEnabled) {
                                     val next = playlistManager.next()
                                     if (next != null) {
                                         playVideo(next.path)
@@ -489,12 +492,39 @@ class MainActivity : AppCompatActivity() {
     private fun startHttpUploadServer() {
         try {
             val dir = getDefaultDirectory()
-            httpUploadServer = HttpUploadServer(port = 8080, uploadDir = dir)
+            httpUploadServer = HttpUploadServer(
+                port = 8080,
+                uploadDir = dir,
+                videoListProvider = { videoScanner?.scanAllVideos() ?: emptyList() },
+                playProvider = { path -> runOnUiThread { playAndAddToPlaylist(path) } },
+                getVideoInfoProvider = { path -> getFileInfo(path) },
+                togglePlayPauseProvider = { runOnUiThread { togglePlayPause() } },
+                isPlayingProvider = { cachedIsPlaying },
+                currentVideoPathProvider = { currentVideoPath }
+            )
             httpUploadServer?.start()
             Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")
         } catch (e: Exception) {
             Log.w(TAG, "HttpUploadServer start failed: ${e.message}")
         }
+    }
+
+    private fun getFileInfo(path: String): Map<String, Any> {
+        val file = File(path)
+        val retriever = android.media.MediaMetadataRetriever()
+        val info = mutableMapOf<String, Any>("path" to path, "name" to file.name, "size" to file.length())
+        try {
+            retriever.setDataSource(path)
+            info["duration"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
+            info["width"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            info["height"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            info["frameRate"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull() ?: 0.0
+            info["mime"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE) ?: ""
+            info["bitrate"] = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toLongOrNull() ?: 0
+            info["isExternal"] = com.oscvideoplayer.FileManager.isExternalPath(path)
+        } catch (_: Exception) {}
+        retriever.release()
+        return info
     }
 
     fun getHttpServerUrl(): String {
@@ -560,12 +590,13 @@ class MainActivity : AppCompatActivity() {
 
     fun playVideo(path: String) {
         runOnUiThread {
+            switchingVideo = true
             currentVideoPath = path
             saveLastVideo(path)
             Log.d(TAG, "playVideo: $path")
 
             initializePlayer()
-            val exoPlayer = player ?: return@runOnUiThread
+            val exoPlayer = player ?: run { switchingVideo = false; return@runOnUiThread }
 
             videoFrameRate = getFrameRate(path)
 
@@ -579,6 +610,7 @@ class MainActivity : AppCompatActivity() {
 
             watchdog?.resetStallDetection()
             hideSystemUI()
+            switchingVideo = false
         }
     }
 
@@ -599,6 +631,9 @@ class MainActivity : AppCompatActivity() {
 
     fun pauseVideo() = runOnUiThread { player?.pause() }
     fun resumeVideo() = runOnUiThread { player?.play() }
+    fun togglePlayPause() {
+        if (cachedIsPlaying) pauseVideo() else resumeVideo()
+    }
 
     fun togglePause() {
         runOnUiThread {
@@ -1087,33 +1122,65 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "Power schedule cleared")
     }
 
-    fun takeScreenshot(): String? {
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var result: String? = null
-        runOnUiThread {
+    fun takeScreenshot(onDone: ((String?) -> Unit)? = null) {
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
             try {
                 val view = window.decorView
+                if (view.width <= 0 || view.height <= 0) {
+                    Log.w(TAG, "View not ready for screenshot")
+                    onDone?.invoke(null)
+                    return@post
+                }
                 val bitmap = android.graphics.Bitmap.createBitmap(
                     view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888
                 )
                 val canvas = android.graphics.Canvas(bitmap)
-                view.draw(canvas)
-                val dir = File(getDefaultDirectory(), ".screenshots")
-                dir.mkdirs()
-                val file = File(dir, "screenshot_${System.currentTimeMillis()}.png")
-                val out = java.io.FileOutputStream(file)
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                out.close()
+
+                val textureView = playerView?.let { findTextureView(it) }
+                val videoBitmap = textureView?.bitmap
+                if (videoBitmap != null && !videoBitmap.isRecycled) {
+                    canvas.drawBitmap(videoBitmap, 0f, 0f, null)
+                } else {
+                    view.draw(canvas)
+                }
+
+                val path = saveScreenshotBitmap(bitmap)
                 bitmap.recycle()
-                result = file.absolutePath
-                Log.d(TAG, "Screenshot saved: ${file.absolutePath}")
+                onDone?.invoke(path)
             } catch (e: Exception) {
-                Log.e(TAG, "Screenshot failed: ${e.message}")
+                Log.e(TAG, "Screenshot error: ${e.message}")
+                onDone?.invoke(null)
             }
-            latch.countDown()
         }
-        latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
-        return result
+    }
+
+    private fun findTextureView(parent: android.view.ViewGroup): android.view.TextureView? {
+        for (i in 0 until parent.childCount) {
+            val child = parent.getChildAt(i)
+            when {
+                child is android.view.TextureView -> return child
+                child is android.view.ViewGroup -> {
+                    findTextureView(child)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun saveScreenshotBitmap(bitmap: android.graphics.Bitmap): String? {
+        return try {
+            val dir = File(getDefaultDirectory(), ".screenshots")
+            dir.mkdirs()
+            val file = File(dir, "screenshot_${System.currentTimeMillis()}.png")
+            java.io.FileOutputStream(file).use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            }
+            Log.d(TAG, "Screenshot saved: ${file.absolutePath}")
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "Screenshot save failed: ${e.message}")
+            null
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
@@ -1126,104 +1193,195 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        Log.d(TAG, "onKeyDown keyCode=$keyCode action=${event?.action}")
         val step = 10000L
         return when (keyCode) {
-            // 播放列表导航 (keep)
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { playPrevious(); true }
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> { playNext(); true }
-            // 快退 10s (带Toast提示)
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
                 player?.let { it.seekTo(maxOf(0L, it.currentPosition - step)) }
                 Toast.makeText(this, "<< 10s", Toast.LENGTH_SHORT).show(); true
             }
-            // 快进 10s (带Toast提示)
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                 player?.let { it.seekTo(minOf(it.duration, it.currentPosition + step)) }
                 Toast.makeText(this, ">> 10s", Toast.LENGTH_SHORT).show(); true
             }
-            // OK/确定 → 暂停/播放
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePause(); true }
             KeyEvent.KEYCODE_MEDIA_PLAY -> { resumeVideo(); true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { pauseVideo(); true }
             KeyEvent.KEYCODE_MEDIA_STOP -> { stopVideo(); true }
-            // MENU 功能菜单
-            KeyEvent.KEYCODE_MENU -> { showMainMenu(); true }
-            // SETTINGS 系统设置
-            KeyEvent.KEYCODE_SETTINGS -> { showSettingsMenu(); true }
-            // INFO 关于
+            // MENU 开关
+            KeyEvent.KEYCODE_MENU -> { toggleMenu(::showMainMenu); true }
+            // SETTINGS 开关 (适配各种遥控器)
+            KeyEvent.KEYCODE_SETTINGS, 176, KeyEvent.KEYCODE_F1, KeyEvent.KEYCODE_F2,
+            KeyEvent.KEYCODE_F3, KeyEvent.KEYCODE_F4, KeyEvent.KEYCODE_F5, KeyEvent.KEYCODE_F6,
+            KeyEvent.KEYCODE_F7, KeyEvent.KEYCODE_F8, KeyEvent.KEYCODE_F9, KeyEvent.KEYCODE_F10,
+            KeyEvent.KEYCODE_F11, KeyEvent.KEYCODE_F12 -> { toggleMenu(::showSettingsMenu); true }
             KeyEvent.KEYCODE_INFO -> { openAboutActivity(); true }
-            // HOME 返回系统桌面
             KeyEvent.KEYCODE_HOME -> { returnToSystemLauncher(); true }
-            // BACK 退出应用
             KeyEvent.KEYCODE_BACK -> { finish(); true }
             else -> super.onKeyDown(keyCode, event)
         }
     }
 
+    override fun onBackPressed() { finish() }
+
+    private fun toggleMenu(show: () -> Unit) {
+        if (menuDialog?.isShowing == true) dismissMenuDialog() else show()
+    }
+
     fun returnToSystemLauncher() {
         try {
-            val intent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_HOME)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            val ourPkg = packageName
+            val homes = packageManager.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0
+            )
+            val realLauncher = homes.firstOrNull { it.activityInfo.packageName != ourPkg }
+            if (realLauncher != null) {
+                startActivity(Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    `package` = realLauncher.activityInfo.packageName
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                })
             }
-            startActivity(intent)
         } catch (e: Exception) {
             Log.e(TAG, "Return to launcher failed: ${e.message}")
         }
     }
 
-    private fun showMainMenu() {
-        val items = arrayOf(
-            "检索视频",       // 0
-            "视频信息",       // 1
-            "播放列表",       // 2
-            "播放模式",       // 3
-            "循环开关",       // 4
-            "截图",          // 5
-            "显示上传地址",   // 6
-            "设为开机视频",   // 7
-            "关于",          // 8
-            "设为默认桌面",   // 9
-            "删除当前视频",   // 10
-            "返回系统桌面",   // 11
-            "退出应用"       // 12
-        )
-        android.app.AlertDialog.Builder(this)
-            .setTitle("菜单")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> openSearchActivity()
-                    1 -> showVideoInfo()
-                    2 -> showPlaylistStatus()
-                    3 -> showPlaylistModeMenu()
-                    4 -> {
-                        setLoop(!isLoopEnabled)
-                        Toast.makeText(this, "循环: ${if (isLoopEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
+    private fun showMenuWithWrap(title: String, items: Array<String>, onItemClick: (Int) -> Unit) {
+        val adapter = object : android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, items) {
+            override fun getView(pos: Int, cv: android.view.View?, parent: android.view.ViewGroup): android.view.View {
+                val v = super.getView(pos, cv, parent) as android.widget.TextView
+                v.setTextColor(0xFFE0E0E0.toInt())
+                v.setHintTextColor(0xFF888888.toInt())
+                v.gravity = android.view.Gravity.CENTER_VERTICAL
+                v.setPadding(32, 18, 32, 18)
+                v.textSize = 16f
+                v.ellipsize = android.text.TextUtils.TruncateAt.END
+                v.maxLines = 1
+                return v
+            }
+        }
+
+        val listView = android.widget.ListView(this)
+        listView.adapter = adapter
+        listView.setOnItemClickListener { _, _, pos, _ -> dismissMenuDialog(); onItemClick(pos) }
+        listView.divider = android.graphics.drawable.ColorDrawable(0x22FFFFFF.toInt())
+        listView.dividerHeight = 1
+        listView.setPadding(0, 4, 0, 4)
+        listView.setBackgroundColor(0xFF1A1A1A.toInt())
+        listView.setSelector(android.graphics.drawable.ColorDrawable(0x44FFCC00.toInt()))
+        listView.setOnKeyListener { v, keyCode, event ->
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val list = v as android.widget.ListView
+                val pos = list.selectedItemPosition
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        val next = if (pos <= 0) list.count - 1 else pos - 1
+                        list.setSelection(next); return@setOnKeyListener true
                     }
-                    5 -> {
-                        val path = takeScreenshot()
-                        Toast.makeText(this, "截图${if (path != null) "成功" else "失败"}", Toast.LENGTH_SHORT).show()
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        val next = if (pos >= list.count - 1) 0 else pos + 1
+                        list.setSelection(next); return@setOnKeyListener true
                     }
-                    6 -> {
-                        val url = getHttpServerUrl()
-                        android.app.AlertDialog.Builder(this)
-                            .setTitle("上传地址")
-                            .setMessage("在浏览器中打开:\n$url")
-                            .setPositiveButton("确定", null)
-                            .show()
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                        dismissMenuDialog(); return@setOnKeyListener true
                     }
-                    7 -> showSetStartupVideo()
-                    8 -> openAboutActivity()
-                    9 -> showSetDefaultLauncherDialog()
-                    10 -> deleteCurrentVideo()
-                    11 -> returnToSystemLauncher()
-                    12 -> finish()
                 }
             }
-            .setNegativeButton("取消", null)
-            .show()
+            false
+        }
+
+        val titleView = android.widget.TextView(this).apply {
+            text = title
+            setTextColor(0xFFE6B800.toInt())
+            textSize = 20f
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 28, 0, 12)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(titleView, android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(listView, android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+
+        menuDialog = android.app.Dialog(this).apply {
+            setContentView(root)
+            val w = resources.displayMetrics.widthPixels * 65 / 100
+            window?.setLayout(w, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+            window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0xFF1A1A1A.toInt()))
+            window?.setGravity(android.view.Gravity.CENTER)
+            setCanceledOnTouchOutside(false)
+            setOnKeyListener { _, keyCode, event ->
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_MENU -> { toggleMenu(::showMainMenu); true }
+                        KeyEvent.KEYCODE_SETTINGS, 176,
+                        KeyEvent.KEYCODE_F1, KeyEvent.KEYCODE_F2, KeyEvent.KEYCODE_F3,
+                        KeyEvent.KEYCODE_F4, KeyEvent.KEYCODE_F5, KeyEvent.KEYCODE_F6,
+                        KeyEvent.KEYCODE_F7, KeyEvent.KEYCODE_F8, KeyEvent.KEYCODE_F9,
+                        KeyEvent.KEYCODE_F10, KeyEvent.KEYCODE_F11, KeyEvent.KEYCODE_F12 -> {
+                            toggleMenu(::showSettingsMenu); true
+                        }
+                        else -> false
+                    }
+                } else false
+            }
+            show()
+        }
+        listView.post { listView.requestFocus(); listView.setSelection(0) }
+    }
+
+    private var menuDialog: android.app.Dialog? = null
+    private fun dismissMenuDialog() { menuDialog?.dismiss(); menuDialog = null }
+
+    private fun showMainMenu() {
+        showMenuWithWrap("菜单", arrayOf(
+            "检索视频",
+            "视频信息",
+            "播放列表",
+            "播放模式",
+            "循环开关",
+            "截图",
+            "显示上传地址",
+            "设为开机视频",
+            "删除当前视频",
+            "系统设置",
+            "关于"
+        )) { which ->
+            when (which) {
+                0 -> openSearchActivity()
+                1 -> showVideoInfo()
+                2 -> showPlaylistStatus()
+                3 -> showPlaylistModeMenu()
+                4 -> {
+                    setLoop(!isLoopEnabled)
+                    Toast.makeText(this, "循环: ${if (isLoopEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
+                }
+                5 -> {
+                    Toast.makeText(this, "截图处理中...", Toast.LENGTH_SHORT).show()
+                    takeScreenshot { path ->
+                        runOnUiThread { Toast.makeText(this, "截图${if (path != null) "成功" else "失败"}", Toast.LENGTH_SHORT).show() }
+                    }
+                }
+                6 -> {
+                    val url = getHttpServerUrl()
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("上传地址")
+                        .setMessage("在浏览器中打开:\n$url")
+                        .setPositiveButton("确定", null).show()
+                }
+                7 -> showSetStartupVideo()
+                8 -> deleteCurrentVideo()
+                9 -> showSettingsMenu()
+                10 -> openAboutActivity()
+            }
+        }
     }
 
     private fun showPlaylistStatus() {
@@ -1307,40 +1465,41 @@ class MainActivity : AppCompatActivity() {
 
     // --- Settings Menu ---
     private fun showSettingsMenu() {
-        val items = arrayOf(
-            "定时开机",       // 0
-            "定时关机",       // 1
-            "清除定时",       // 2
-            "电源管理",       // 3
-            "显示模式",       // 4
-            "显示信息",       // 5
-            "恢复默认设置"    // 6
-        )
-        android.app.AlertDialog.Builder(this)
-            .setTitle("设置")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> showTimePickerDialog("定时开机") { time ->
-                        schedulePowerOn(time)
-                        Toast.makeText(this, "定时开机: $time", Toast.LENGTH_SHORT).show()
-                    }
-                    1 -> showTimePickerDialog("定时关机") { time ->
-                        schedulePowerOff(time)
-                        Toast.makeText(this, "定时关机: $time", Toast.LENGTH_SHORT).show()
-                    }
-                    2 -> {
-                        scheduleClear()
-                        schedulePowerClear()
-                        Toast.makeText(this, "已清除所有定时", Toast.LENGTH_SHORT).show()
-                    }
-                    3 -> showPowerMenu()
-                    4 -> showColorModeMenu()
-                    5 -> showDisplayInfoDialog()
-                    6 -> showResetSettingsDialog()
+        showMenuWithWrap("系统设置", arrayOf(
+            "定时开机",
+            "定时关机",
+            "清除定时",
+            "电源管理",
+            "显示模式",
+            "显示信息",
+            "设为默认桌面",
+            "返回系统桌面",
+            "恢复默认设置",
+            "退出应用"
+        )) { which ->
+            when (which) {
+                0 -> showTimePickerDialog("定时开机") { time ->
+                    schedulePowerOn(time)
+                    Toast.makeText(this, "定时开机: $time", Toast.LENGTH_SHORT).show()
                 }
+                1 -> showTimePickerDialog("定时关机") { time ->
+                    schedulePowerOff(time)
+                    Toast.makeText(this, "定时关机: $time", Toast.LENGTH_SHORT).show()
+                }
+                2 -> {
+                    scheduleClear()
+                    schedulePowerClear()
+                    Toast.makeText(this, "已清除所有定时", Toast.LENGTH_SHORT).show()
+                }
+                3 -> showPowerMenu()
+                4 -> showColorModeMenu()
+                5 -> showDisplayInfoDialog()
+                6 -> showSetDefaultLauncherDialog()
+                7 -> returnToSystemLauncher()
+                8 -> showResetSettingsDialog()
+                9 -> finish()
             }
-            .setNegativeButton("取消", null)
-            .show()
+        }
     }
 
     private fun showTimePickerDialog(title: String, onConfirm: (String) -> Unit) {

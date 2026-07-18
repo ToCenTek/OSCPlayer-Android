@@ -8,10 +8,17 @@ import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 class HttpUploadServer(
     private val port: Int = 8080,
-    private val uploadDir: String
+    private val uploadDir: String,
+    private val videoListProvider: (() -> List<VideoScanner.VideoItem>)? = null,
+    private val playProvider: ((String) -> Unit)? = null,
+    private val getVideoInfoProvider: ((String) -> Map<String, Any>)? = null,
+    private val togglePlayPauseProvider: (() -> Unit)? = null,
+    private val isPlayingProvider: (() -> Boolean)? = null,
+    private val currentVideoPathProvider: (() -> String?)? = null
 ) {
     private val tag = "HttpUploadServer"
     private var serverSocket: ServerSocket? = null
@@ -71,7 +78,9 @@ class HttpUploadServer(
 
         try {
             when {
-                method == "GET" -> serveHtml(client)
+                method == "GET" && path == "/" -> serveHtml(client)
+                method == "GET" && path.startsWith("/files") -> serveFiles(client, path)
+                method == "GET" && path.startsWith("/screenshots") -> serveScreenshots(client, path)
                 method == "POST" && path == "/upload" -> handleUpload(client, input, headers, contentLength)
                 else -> sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
             }
@@ -83,6 +92,232 @@ class HttpUploadServer(
             sendResponse(client, 500, "Error", "text/plain", e.message ?: "Error")
         }
     }
+
+    // ────── /files ──────
+
+    private fun serveFiles(client: Socket, rawPath: String) {
+        // Parse query params (supports both key=value and key-only)
+        val query = if (rawPath.contains("?")) rawPath.substringAfter("?") else ""
+        val params = mutableMapOf<String, String>()
+        for (kv in query.split("&").filter { it.isNotEmpty() }) {
+            val eq = kv.indexOf("=")
+            if (eq > 0) {
+                params[kv.substring(0, eq)] = URLDecoder.decode(kv.substring(eq + 1), "UTF-8")
+            } else {
+                params[kv] = ""
+            }
+        }
+
+        // JSON state endpoint
+        if ("state" in params) {
+            val currentPath = currentVideoPathProvider?.invoke() ?: ""
+            val isPlaying = isPlayingProvider?.invoke() ?: false
+            val json = """{"playing":$isPlaying,"currentPath":"${currentPath.replace("\"", "\\\"")}"}"""
+            return sendResponse(client, 200, "OK", "application/json", json.toByteArray(), "Cache-Control: no-cache")
+        }
+
+        val action = params.keys.firstOrNull { it in setOf("play", "toggle", "dl", "del", "info") }
+        val filePath = params[action]
+
+        if (action != null && filePath != null) {
+            val file = File(filePath)
+            when (action) {
+                "play" -> {
+                    playProvider?.invoke(filePath)
+                    val redirect = "HTTP/1.1 302 Found\r\nLocation: /files\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    try { client.getOutputStream().write(redirect.toByteArray()); client.getOutputStream().flush() } catch (_: Exception) {}
+                }
+                "toggle" -> {
+                    val currentPath = currentVideoPathProvider?.invoke()
+                    if (filePath == currentPath) {
+                        togglePlayPauseProvider?.invoke()
+                    } else {
+                        playProvider?.invoke(filePath)
+                    }
+                    val redirect = "HTTP/1.1 302 Found\r\nLocation: /files\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    try { client.getOutputStream().write(redirect.toByteArray()); client.getOutputStream().flush() } catch (_: Exception) {}
+                }
+                "dl" -> {
+                    if (file.exists() && file.isFile) {
+                        sendResponse(client, 200, "OK", "application/octet-stream", file.readBytes(),
+                            "Content-Disposition: attachment; filename=\"${file.name}\"")
+                    } else {
+                        sendResponse(client, 404, "Not Found", "text/plain", "文件不存在")
+                    }
+                }
+                "del" -> {
+                    if (FileManager.isExternalPath(filePath)) {
+                        sendResponse(client, 403, "Forbidden", "text/html; charset=utf-8",
+                            """<script>alert('USB/SD卡文件不允许删除');location.href='/files'</script>""".toByteArray())
+                    } else if (file.exists()) {
+                        file.delete()
+                        Log.d(tag, "Deleted: $filePath")
+                        val redirect = "HTTP/1.1 302 Found\r\nLocation: /files\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        try { client.getOutputStream().write(redirect.toByteArray()); client.getOutputStream().flush() } catch (_: Exception) {}
+                    } else {
+                        sendResponse(client, 404, "Not Found", "text/plain", "文件不存在")
+                    }
+                }
+                "info" -> {
+                    val info = getVideoInfoProvider?.invoke(filePath) ?: mapOf("path" to filePath)
+                    val rows = buildString {
+                        info.forEach { (k, v) ->
+                            val label = when (k) {
+                                "path" -> "路径"
+                                "name" -> "文件名"
+                                "size" -> "大小"
+                                "duration" -> "时长"
+                                "width" -> "宽度"
+                                "height" -> "高度"
+                                "frameRate" -> "帧率"
+                                "mime" -> "格式"
+                                "bitrate" -> "码率"
+                                "isExternal" -> "存储位置"
+                                else -> k
+                            }
+                            val value = when (k) {
+                                "size" -> formatSize((v as? Number)?.toLong() ?: 0)
+                                "duration" -> formatDuration((v as? Number)?.toLong() ?: 0)
+                                "frameRate" -> String.format("%.2f fps", v)
+                                "isExternal" -> if (v == true) "USB/SD卡" else "内部存储"
+                                else -> v.toString()
+                            }
+                            append("<tr><td class=lk>$label</td><td class=lv>$value</td></tr>\n")
+                        }
+                    }
+                    val html = """<!DOCTYPE html>
+<html lang=zh><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>文件信息 - OSCPlayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px}
+h1{font-size:20px;color:#fc0;margin-bottom:16px;text-align:center}
+table{width:100%;max-width:600px;margin:0 auto;border-collapse:collapse;font-size:13px;background:rgba(255,255,255,.03);border-radius:10px;overflow:hidden}
+tr{border-bottom:1px solid rgba(255,255,255,.06)}
+tr:last-child{border-bottom:none}
+td{padding:10px 14px;vertical-align:top;word-break:break-all}
+td.lk{color:#888;white-space:nowrap;width:80px}
+td.lv{color:#ccc}
+.back{display:block;text-align:center;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6}
+.back:hover{opacity:1}
+</style></head>
+<body><h1>文件信息</h1><table>$rows</table>
+<a class=back href="/files">&larr; 返回文件列表</a>
+</body></html>"""
+                    sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache")
+                }
+            }
+            return
+        }
+
+        // Show file listing page
+        val videos = videoListProvider?.invoke() ?: emptyList()
+        if (videos.isEmpty()) {
+            return sendResponse(client, 200, "OK", "text/html; charset=utf-8", """
+                <!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
+                <meta name=viewport content="width=device-width,initial-scale=1">
+                <title>文件管理 - OSCPlayer</title>
+                <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px;text-align:center}
+                .empty{margin-top:80px;font-size:18px;color:#666}
+                .back{display:block;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6}
+                .back:hover{opacity:1}</style></head>
+                <body><div class=empty>暂无文件</div>
+                <a class=back href="/">&larr; 返回上传</a></body></html>""")
+        }
+
+        val internalItems = videos.filter { !it.isFromUSB }
+        val usbItems = videos.filter { it.isFromUSB }
+
+        fun renderGroup(items: List<VideoScanner.VideoItem>, title: String, icon: String): String {
+            if (items.isEmpty()) return ""
+            val rows = items.joinToString("\n") { v ->
+                val encPath = URLEncoder.encode(v.path, "UTF-8")
+                val size = formatSize(v.size)
+                val typeBadge = when (v.mediaType) {
+                    "video" -> "<span class=badge style='background:#1a6b3c'>视频</span>"
+                    "audio" -> "<span class=badge style='background:#6b4c1a'>音频</span>"
+                    "image" -> "<span class=badge style='background:#3c1a6b'>图片</span>"
+                    else -> "<span class=badge style='background:#444'>${v.mediaType}</span>"
+                }
+                val delClass = if (FileManager.isExternalPath(v.path)) "del muted" else "del"
+                val delTitle = if (FileManager.isExternalPath(v.path)) "USB文件不可删除" else "删除"
+                val delConfirm = if (FileManager.isExternalPath(v.path)) "" else "onclick=\"return confirm('确定删除 ${v.name} ?')\""
+                val delHref = if (FileManager.isExternalPath(v.path)) "#" else "/files?del=$encPath"
+                val delHandler = if (FileManager.isExternalPath(v.path)) "onclick=\"alert('USB/SD卡文件不允许删除');return false\"" else delConfirm
+                """<div class=item>
+<div class=ih><div class=iname>$typeBadge <span class=name>${v.name}</span></div><span class=isize>$size</span></div>
+<div class=ia>
+<a class="ab play-btn" href="/files?toggle=$encPath" data-path="$encPath">&#x25B6; 播放</a>
+<a class=ab href="/files?dl=$encPath" title="下载">&#x2913; 下载</a>
+<a class=ab href="/files?info=$encPath" title="信息">&#x2139; 信息</a>
+<a class="ab $delClass" href="$delHref" $delHandler title="$delTitle">&#x2715; 删除</a>
+</div></div>"""
+            }
+            return """<h2>$icon $title <span class=count>${items.size}</span></h2>
+<div class=list>$rows</div>"""
+        }
+
+        val internalSection = renderGroup(internalItems, "内部存储", "&#x1F4BE;")
+        val usbSection = renderGroup(usbItems, "USB/SD卡", "&#x1F4E5;")
+
+        val html = """<!DOCTYPE html>
+<html lang=zh>
+<head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>文件管理 - OSCPlayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px;max-width:900px;margin:0 auto}
+h1{font-size:22px;color:#fc0;margin-bottom:20px;text-align:center}
+h2{font-size:16px;color:#eee;margin:20px 0 10px;display:flex;align-items:center;gap:8px}
+h2 .count{font-size:12px;color:#888;background:rgba(255,255,255,.08);padding:2px 10px;border-radius:10px;font-weight:400}
+.list{display:flex;flex-direction:column;gap:8px}
+.item{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:10px 14px;transition:background .15s}
+.item:hover{background:rgba(255,255,255,.07)}
+.ih{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.iname{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
+.name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#ddd}
+.isize{font-size:12px;color:#666;white-space:nowrap}
+.badge{font-size:11px;padding:2px 8px;border-radius:4px;color:#fff;white-space:nowrap}
+.ia{display:flex;gap:6px;flex-wrap:wrap}
+.ab{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:6px;font-size:12px;text-decoration:none;color:#aaa;background:rgba(255,255,255,.06);transition:all .15s}
+.ab:hover{background:rgba(255,255,255,.12);color:#fc0}
+.ab.del:hover{color:#f44;background:rgba(255,68,68,.12)}
+.ab.muted{opacity:.35;cursor:not-allowed;pointer-events:none}
+.back{display:block;text-align:center;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6;padding:8px}
+.back:hover{opacity:1}
+.sep{height:1px;background:rgba(255,255,255,.06);margin:8px 0}
+</style></head>
+<body>
+<h1>&#x1F4C1; 文件管理</h1>
+$internalSection
+${if (internalItems.isNotEmpty() && usbItems.isNotEmpty()) "<div class=sep></div>" else ""}
+$usbSection
+<a class=back href="/">&larr; 返回上传</a>
+<script>
+function updatePlayButtons(){
+ var x=new XMLHttpRequest();
+ x.open('GET','/files?state',true);
+ x.onload=function(){
+  try{
+   var s=JSON.parse(x.responseText);
+   document.querySelectorAll('.play-btn').forEach(function(b){
+    var same=s.currentPath&&decodeURIComponent(b.dataset.path)===s.currentPath;
+    if(same&&s.playing){b.innerHTML='&#x23F8; 暂停';b.title='暂停'}
+    else if(same){b.innerHTML='&#x25B6; 继续';b.title='继续播放'}
+    else{b.innerHTML='&#x25B6; 播放';b.title='播放'}
+   });
+  }catch(e){}
+ };
+ x.send();
+}
+updatePlayButtons();
+setInterval(updatePlayButtons,3000);
+</script>
+</body></html>"""
+        sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache")
+    }
+
+    // ────── Homepage ──────
 
     private fun serveHtml(client: Socket) {
         val html = """<!DOCTYPE html>
@@ -112,7 +347,9 @@ input[type=file]{display:none}
 .btn-wrap button:disabled{cursor:not-allowed}
 .btn-wrap button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 8px 24px rgba(255,204,0,.3)}
 .btn-wrap button:active:not(:disabled){transform:translateY(0)}
-.footer{font-size:12px;color:#555;margin-top:28px}
+.footer{font-size:12px;color:#555;margin-top:28px;line-height:2}
+.footer a{color:#666;text-decoration:none;margin:0 6px}
+.footer a:hover{color:#fc0}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
@@ -130,7 +367,11 @@ input[type=file]{display:none}
 <div class=btn-progress id=btnProgress></div>
 <button id=uploadBtn disabled>上传</button>
 </div>
-<div class=footer>OSCPlayer &middot; 视频播放管理系统</div>
+<div class=footer>
+<a href="/files">文件管理</a> &middot;
+<a href="/screenshots">截图</a> &middot;
+OSCPlayer 视频播放管理系统
+</div>
 </div>
 <script>
 var zone=document.getElementById('dropZone'),input=document.getElementById('fileInput'),btn=document.getElementById('uploadBtn'),fname=document.getElementById('fileName'),hint=document.getElementById('dropHint'),prog=document.getElementById('btnProgress');
@@ -165,8 +406,123 @@ btn.onclick=function(){
         sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache, no-store, must-revalidate")
     }
 
+    // ────── Screenshots ──────
+
+    private fun serveScreenshots(client: Socket, path: String) {
+        val screenshotsDir = File(uploadDir, ".screenshots")
+
+        val deletePrefix = "/screenshots/delete/"
+        if (path.startsWith(deletePrefix)) {
+            val name = path.removePrefix(deletePrefix)
+            val file = File(screenshotsDir, name)
+            if (file.exists()) file.delete()
+            val redirect = "HTTP/1.1 302 Found\r\nLocation: /screenshots\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            try { client.getOutputStream().write(redirect.toByteArray()); client.getOutputStream().flush() } catch (_: Exception) {}
+            return
+        }
+
+        val filename = path.removePrefix("/screenshots/")
+        if (filename.isNotEmpty() && filename.contains(".") && !filename.contains("/")) {
+            val file = File(screenshotsDir, filename)
+            if (file.exists() && file.isFile) {
+                return sendResponse(client, 200, "OK", "image/png", file.readBytes(),
+                    "Cache-Control: max-age=3600")
+            }
+            return sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
+        }
+
+        if (!screenshotsDir.exists()) {
+            return sendResponse(client, 200, "OK", "text/html; charset=utf-8", """
+                <!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
+                <title>截图 - OSCPlayer</title><meta name=viewport content="width=device-width,initial-scale=1">
+                <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px;text-align:center}
+                .empty{margin-top:80px;font-size:18px;color:#666}</style></head>
+                <body><div class=empty>暂无截图</div></body></html>""")
+        }
+
+        val files = screenshotsDir.listFiles()?.filter { it.name.endsWith(".png") }
+            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+        val items = files.joinToString("\n") { f ->
+            val name = f.name
+            val size = when {
+                f.length() >= 1024L * 1024 -> String.format("%.1f MB", f.length() / (1024.0 * 1024.0))
+                f.length() >= 1024 -> "${f.length() / 1024} KB"
+                else -> "${f.length()} B"
+            }
+            """<div class=item>
+<img src="/screenshots/$name" loading=lazy onclick="openViewer('$name')">
+<div class=info>
+<span class=name>$name</span>
+<span class=size>$size</span>
+<span class=actions>
+<a href="/screenshots/$name" download class=btn title="下载">&#x2913;</a>
+<a href="/screenshots/delete/$name" class="btn del" title="删除" onclick="return confirm('确定删除 $name ?')">&#x2715;</a>
+</span>
+</div></div>"""
+        }
+
+        val html = """<!DOCTYPE html>
+<html lang=zh>
+<head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>截图 - OSCPlayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px}
+h1{font-size:22px;color:#fc0;margin-bottom:20px;text-align:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.item{background:rgba(255,255,255,.05);border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
+.item img{width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:#000;display:block;cursor:pointer;transition:opacity .2s}
+.item img:hover{opacity:.85}
+.item .info{padding:8px 12px;display:flex;align-items:center;font-size:12px;gap:8px}
+.item .name{color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.item .size{color:#555;white-space:nowrap}
+.item .actions{display:flex;gap:2px}
+.item .btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;text-decoration:none;font-size:15px;color:#888;transition:background .2s,color .2s}
+.item .btn:hover{background:rgba(255,255,255,.1);color:#fc0}
+.item .btn.del:hover{color:#f44}
+.back{display:block;text-align:center;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6;padding:8px}
+.back:hover{opacity:1}
+#viewer{display:none;position:fixed;z-index:999;inset:0;background:rgba(0,0,0,.95);justify-content:center;align-items:center}
+#viewer.open{display:flex}
+#viewer img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:4px;box-shadow:0 0 60px rgba(0,0,0,.8)}
+#viewer .close{position:absolute;top:16px;right:20px;font-size:36px;color:#888;cursor:pointer;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(255,255,255,.08);border:none;transition:background .2s,color .2s;z-index:10}
+#viewer .close:hover{background:rgba(255,255,255,.15);color:#fff}
+#viewer .vdl{position:absolute;top:16px;right:80px;font-size:14px;color:#fc0;text-decoration:none;padding:12px 20px;border-radius:8px;background:rgba(255,255,255,.08);transition:background .2s}
+#viewer .vdl:hover{background:rgba(255,255,255,.15)}
+</style>
+</head>
+<body>
+<h1>&#x1F4F7; 截图</h1>
+<div class=grid id=grid>$items</div>
+<a class=back href="/">&larr; 返回上传</a>
+<div id=viewer onclick="if(event.target==this)closeViewer()">
+<button class=close onclick="closeViewer()">&times;</button>
+<a class=vdl id=vdl href="#" download>下载</a>
+<img id=vimg src="" alt="">
+</div>
+<script>
+function openViewer(name){
+ document.getElementById('vimg').src='/screenshots/'+name;
+ document.getElementById('vdl').href='/screenshots/'+name;
+ document.getElementById('viewer').classList.add('open');
+ document.body.style.overflow='hidden';
+}
+function closeViewer(){
+ document.getElementById('viewer').classList.remove('open');
+ document.getElementById('vimg').src='';
+ document.body.style.overflow='';
+}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeViewer()});
+</script>
+</body></html>"""
+        sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache")
+    }
+
+    // ────── Upload ──────
+
     private fun handleUpload(client: Socket, input: InputStream, headers: Map<String, String>, contentLength: Int) {
-        val MAX_BODY = 200 * 1024 * 1024 // 200MB limit
+        val MAX_BODY = 200 * 1024 * 1024
         if (contentLength > MAX_BODY) {
             input.skip(contentLength.toLong())
             return sendResponse(client, 413, "Too Large", "text/plain; charset=utf-8", "文件超过200MB限制".toByteArray())
@@ -228,6 +584,24 @@ btn.onclick=function(){
             if (!candidate.exists()) return candidate
             counter++
         }
+    }
+
+    // ────── Helpers ──────
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> "${bytes / 1024} KB"
+        else -> "$bytes B"
+    }
+
+    private fun formatDuration(ms: Long): String {
+        if (ms <= 0) return "未知"
+        val totalSec = ms / 1000
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return if (h > 0) String.format("%d:%02d:%02d", h, m, s) else String.format("%d:%02d", m, s)
     }
 
     private fun parseFilename(headers: Map<String, String>): String? {
