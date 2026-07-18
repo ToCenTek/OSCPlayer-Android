@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OSCVideoPlayer</string>
+    <string name="search">搜索</string>
+    <string name="about">关于</string>
+    <string name="search_videos">搜索视频</string>
+    <string name="no_videos">未找到视频</string>
+    <string name="copy_to_internal">复制到内置存储</string>
+    <string name="rename">重命名</string>
+    <string name="delete">删除</string>
+    <string name="confirm_delete">确认删除此视频？</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="enter_new_name">输入新名称</string>
+    <string name="copy_success">复制成功</string>
+    <string name="copy_failed">复制失败</string>
+    <string name="rename_success">重命名成功</string>
+    <string name="rename_failed">重命名失败</string>
+    <string name="delete_success">删除成功</string>
+    <string name="delete_failed">删除失败</string>
+    <string name="version">版本</string>
+    <string name="port">端口</string>
+    <string name="ip_address">IP地址</string>
+    <string name="developer">开发者</string>
+    <string name="email">Email</string>
+    <string name="internal_storage">内置存储</string>
+    <string name="usb_storage">USB存储</string>
+</resources>

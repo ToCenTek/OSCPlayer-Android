@@ -1,0 +1,38 @@
+[
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/layout_activity_about.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/layout/activity_about.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/layout_activity_search.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/layout/activity_search.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/layout_activity_main.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/drawable_video_item_selector.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/drawable/video_item_selector.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/layout_item_video.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/layout/item_video.xml"
+    },
+    {
+        "merged": "com.oscvideoplayer.app-normalDebug-46:/color_video_item_bg.xml.flat",
+        "source": "com.oscvideoplayer.app-main-48:/color/video_item_bg.xml"
+    }
+]

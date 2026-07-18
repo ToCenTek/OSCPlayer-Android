@@ -1,0 +1,79 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.oscvideoplayer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.oscvideoplayer"
+        minSdk 23
+        targetSdk 34
+        versionCode 2
+        versionName "2.0.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    flavorDimensions += "installer"
+    productFlavors {
+        normal {
+            dimension = "installer"
+            applicationIdSuffix = ""
+        }
+        system {
+            dimension = "installer"
+            applicationId = "com.oscvideoplayer.system"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions {
+        jvmTarget = '11'
+    }
+}
+
+dependencies {
+    // ExoPlayer (Media3) with extensions
+    implementation 'androidx.media3:media3-exoplayer:1.2.1'
+    implementation 'androidx.media3:media3-ui:1.2.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.2.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.2.1'
+    implementation 'androidx.media3:media3-exoplayer-smoothstreaming:1.2.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.2.1'
+
+    // Kotlin & AndroidX
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.10.0'
+    implementation 'androidx.activity:activity-ktx:1.8.1'
+
+    // Lifecycle
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
+
+    // Coroutines
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    // WorkManager for background tasks
+    implementation 'androidx.work:work-runtime-ktx:2.9.0'
+
+    // Testing
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}

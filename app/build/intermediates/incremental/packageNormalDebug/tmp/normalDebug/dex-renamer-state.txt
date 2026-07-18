@@ -1,0 +1,13 @@
+#Sat Jul 18 10:27:18 CST 2026
+path.3=classes2.dex
+path.2=8/classes.dex
+path.1=0/classes.dex
+path.0=classes.dex
+base.3=/Users/yhc/OSCPlayer_Android/app/build/intermediates/dex/normalDebug/mergeExtDexNormalDebug/classes2.dex
+base.2=/Users/yhc/OSCPlayer_Android/app/build/intermediates/dex/normalDebug/mergeProjectDexNormalDebug/8/classes.dex
+base.1=/Users/yhc/OSCPlayer_Android/app/build/intermediates/dex/normalDebug/mergeProjectDexNormalDebug/0/classes.dex
+base.0=/Users/yhc/OSCPlayer_Android/app/build/intermediates/dex/normalDebug/mergeExtDexNormalDebug/classes.dex
+renamed.3=classes4.dex
+renamed.2=classes3.dex
+renamed.1=classes2.dex
+renamed.0=classes.dex

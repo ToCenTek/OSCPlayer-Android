@@ -1,0 +1,1289 @@
+package com.oscvideoplayer
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.os.PowerManager
+import android.util.DisplayMetrics
+import android.util.Log
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Calendar
+
+@UnstableApi
+class MainActivity : AppCompatActivity() {
+
+    private var player: ExoPlayer? = null
+    private var playerView: PlayerView? = null
+    private var oscServer: OSCServer? = null
+    private var videoScanner: VideoScanner? = null
+    private var playlistManager = PlaylistManager()
+    private var watchdog: Watchdog? = null
+    @Volatile
+    private var currentVideoPath: String? = null
+    private var isLoopEnabled = true
+    private var videoFrameRate = 30.0
+    private var videoDuration = 0L
+    @Volatile
+    private var playbackSpeed = 1.0f
+    @Volatile
+    private var cachedIsPlaying = false
+    @Volatile
+    private var cachedPosition = 0L
+    @Volatile
+    private var cachedVolume = 1.0f
+
+    private lateinit var prefs: SharedPreferences
+    private var nsdManager: NsdManager? = null
+    private var nsdRegistrationListener: NsdManager.RegistrationListener? = null
+    private var pendingVideoPath: String? = null
+    private var scheduleJob: Job? = null
+    private var powerScheduleJob: Job? = null
+    private var screenReceiver: ScreenReceiver? = null
+    private var scheduleStartTime: String? = null
+    private var httpUploadServer: HttpUploadServer? = null
+    private var scheduleStopTime: String? = null
+    private var powerOnTime: String? = null
+    private var powerOffTime: String? = null
+
+    companion object {
+        private const val TAG = "MainActivity"
+        private const val PREFS_NAME = "OSCVideoPlayer"
+        private const val KEY_LAST_VIDEO = "last_video_path"
+        private const val KEY_LOOP_ENABLED = "loop_enabled"
+        private const val KEY_DEFAULT_DIR = "default_directory"
+        private const val KEY_SCHEDULE_START = "schedule_start"
+        private const val KEY_SCHEDULE_STOP = "schedule_stop"
+        private const val KEY_POWER_ON = "power_on_time"
+        private const val KEY_POWER_OFF = "power_off_time"
+        private const val NSD_SERVICE_TYPE = "_osc._udp."
+        private const val NSD_SERVICE_PORT = 8000
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.entries.all { it.value }) {
+            startApp(pendingVideoPath)
+        } else {
+            Toast.makeText(this, "需要存储权限才能扫描视频", Toast.LENGTH_LONG).show()
+            startApp(pendingVideoPath)
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hideSystemUI()
+        setContentView(R.layout.activity_main)
+        playerView = findViewById(R.id.playerView)
+
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+
+        val isFromBoot = intent.getBooleanExtra("from_boot", false)
+        Log.d(TAG, "onCreate: isFromBoot=$isFromBoot")
+
+        BootWorker.schedule(this)
+        AlarmReceiver.schedule(this)
+
+        val videoPath = intent.getStringExtra("video_path")
+        pendingVideoPath = videoPath
+
+        requestPermissions(videoPath)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val videoPath = intent.getStringExtra("video_path")
+        OSCServer.setCallback(this)
+        if (videoPath != null && File(videoPath).exists()) {
+            playAndAddToPlaylist(videoPath)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideSystemUI()
+    }
+
+    private fun requestPermissions(playVideoPath: String? = null) {
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(android.Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            permissions.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+                permissions.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+        if (permissions.isNotEmpty()) {
+            requestPermissionLauncher.launch(permissions.toTypedArray())
+        } else {
+            startApp(playVideoPath)
+        }
+    }
+
+    private fun startApp(playVideoPath: String? = null) {
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        videoScanner = VideoScanner(this).also {
+            it.watchDirectory(File(getDefaultDirectory()))
+        }
+
+        startService(Intent(this, OSCService::class.java))
+        OSCServer.setCallback(this)
+
+        registerNsdService()
+
+        startHttpUploadServer()
+
+        val isFirstLaunch = prefs.getBoolean("first_launch", true)
+        if (isFirstLaunch) {
+            prefs.edit().putBoolean("first_launch", false).apply()
+            tryAutoSetDefaultLauncher()
+        }
+
+        isLoopEnabled = prefs.getBoolean(KEY_LOOP_ENABLED, true)
+
+        scheduleStartTime = prefs.getString(KEY_SCHEDULE_START, null)
+        scheduleStopTime = prefs.getString(KEY_SCHEDULE_STOP, null)
+        powerOnTime = prefs.getString(KEY_POWER_ON, null)
+        powerOffTime = prefs.getString(KEY_POWER_OFF, null)
+
+        startScheduleChecker()
+        startPowerScheduleChecker()
+
+        requestBatteryOptimizationSilent()
+
+        pendingVideoPath = null
+
+        val videoToPlay = playVideoPath
+        if (videoToPlay != null && File(videoToPlay).exists()) {
+            playVideo(videoToPlay)
+        } else {
+            autoPlayHelloVideo()
+        }
+    }
+
+    private fun requestBatteryOptimizationSilent() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) {
+                Log.d(TAG, "Battery optimization already disabled")
+            } else {
+                Log.d(TAG, "Battery optimization is enabled, can't auto-disable without user prompt")
+            }
+        }
+    }
+
+    private fun registerNsdService() {
+        try {
+            nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
+            val hostAddress = getLocalIPAddress() ?: return
+            val nsdServiceName = "Android OSCPlayer - ${Build.MODEL}"
+
+            nsdRegistrationListener = object : NsdManager.RegistrationListener {
+                override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
+                    Log.d(TAG, "NSD registered: ${serviceInfo.serviceName}")
+                }
+                override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                    Log.e(TAG, "NSD registration failed: $errorCode")
+                }
+                override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {
+                    Log.d(TAG, "NSD unregistered")
+                }
+                override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                    Log.e(TAG, "NSD unregistration failed: $errorCode")
+                }
+            }
+
+            val serviceInfo = NsdServiceInfo().apply {
+                serviceName = nsdServiceName
+                serviceType = NSD_SERVICE_TYPE
+                port = NSD_SERVICE_PORT
+                host = java.net.InetAddress.getByName(hostAddress)
+            }
+            nsdManager?.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, nsdRegistrationListener)
+            Log.d(TAG, "NSD: $nsdServiceName on $hostAddress:$NSD_SERVICE_PORT")
+        } catch (e: Exception) {
+            Log.e(TAG, "NSD error: ${e.message}")
+        }
+    }
+
+    private fun getLocalIPAddress(): String? {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val intf = interfaces.nextElement()
+                val addresses = intf.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val addr = addresses.nextElement()
+                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                        return addr.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getLocalIPAddress: ${e.message}")
+        }
+        return null
+    }
+
+    private fun unregisterNsdService() {
+        try {
+            nsdRegistrationListener?.let { nsdManager?.unregisterService(it) }
+        } catch (e: Exception) {
+            Log.e(TAG, "NSD unregister error: ${e.message}")
+        }
+    }
+
+    private fun saveLastVideo(path: String) {
+        prefs.edit().putString(KEY_LAST_VIDEO, path).apply()
+    }
+
+    private fun getLastVideoPath(): String? = prefs.getString(KEY_LAST_VIDEO, null)
+
+    private fun hideSystemUI() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            )
+        } else {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            )
+        }
+    }
+
+    private fun autoPlayHelloVideo() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            processPendingPlaylist()
+
+            val loopPrefs = getSharedPreferences("loop", Context.MODE_PRIVATE)
+            val loopVideo = loopPrefs.getString("video", null)
+            if (loopPrefs.getBoolean("enabled", false) && loopVideo != null && File(loopVideo).exists()) {
+                loopPrefs.edit().clear().apply()
+                setLoop(true)
+                setPlaylistMode("1")
+                clearPlaylist()
+                addToPlaylist(loopVideo)
+                withContext(Dispatchers.Main) { playVideo(loopVideo) }
+                return@launch
+            }
+
+            val videos = videoScanner?.scanAllVideos() ?: return@launch
+            // Rebuild playlist from scanned videos
+            playlistManager.clear()
+            playlistManager.addAll(videos.map { it.path })
+            Log.d(TAG, "Playlist rebuilt: ${videos.size} videos")
+
+            val lastVideo = getLastVideoPath()
+            val lastVideoExists = lastVideo != null && File(lastVideo).exists()
+            val helloVideo = videos.find { it.name.lowercase().startsWith("hello.") }
+
+            withContext(Dispatchers.Main) {
+                val videoToPlay = when {
+                    lastVideoExists -> {
+                        playlistManager.setCurrentByPath(lastVideo!!)
+                        lastVideo
+                    }
+                    helloVideo != null -> {
+                        playlistManager.setCurrentByPath(helloVideo.path)
+                        helloVideo.path
+                    }
+                    videos.isNotEmpty() -> {
+                        playlistManager.jumpTo(0)
+                        videos.first().path
+                    }
+                    else -> null
+                }
+                if (videoToPlay != null) playVideo(videoToPlay)
+            }
+        }
+    }
+
+    private fun processPendingPlaylist() {
+        val prefs = getSharedPreferences("playlist", Context.MODE_PRIVATE)
+        val pending = prefs.getStringSet("pending", null) ?: return
+        prefs.edit().remove("pending").apply()
+        val scanner = videoScanner ?: return
+        val allVideos = scanner.scanAllVideos()
+        for (path in pending) {
+            if (allVideos.any { it.path == path }) {
+                playlistManager.add(path)
+            }
+        }
+        if (playlistManager.size > 0) {
+            val first = playlistManager.currentItem
+            if (first != null) {
+                val firstPath = first.path
+                runOnUiThread { playVideo(firstPath) }
+            }
+        }
+    }
+
+    private fun initializePlayer(): ExoPlayer {
+        if (player == null) {
+            val hevcSelector = object : MediaCodecSelector {
+                override fun getDecoderInfos(
+                    mimeType: String,
+                    requiresSecureDecoder: Boolean,
+                    requiresTunneling: Boolean
+                ): List<MediaCodecInfo> {
+                    val defaultInfos = MediaCodecSelector.DEFAULT.getDecoderInfos(
+                        mimeType, requiresSecureDecoder, requiresTunneling)
+                    if (mimeType == MimeTypes.VIDEO_H265) {
+                        try {
+                            val patched = patchAmlogicHevcDecoder(defaultInfos)
+                            if (patched != null) return patched
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to patch Amlogic HEVC decoder", e)
+                        }
+                    }
+                    return defaultInfos
+                }
+            }
+
+            val renderersFactory = DefaultRenderersFactory(this)
+                .setEnableDecoderFallback(true)
+                .setMediaCodecSelector(hevcSelector)
+
+            player = ExoPlayer.Builder(this, renderersFactory)
+                .setHandleAudioBecomingNoisy(true)
+                .build()
+                .apply {
+                    repeatMode = if (isLoopEnabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                    setPlaybackSpeed(playbackSpeed)
+
+                    addListener(object : Player.Listener {
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            cachedIsPlaying = player?.isPlaying == true
+                            cachedPosition = player?.currentPosition ?: 0L
+
+                            if (playbackState == Player.STATE_ENDED) {
+                                if (!isLoopEnabled) {
+                                    val next = playlistManager.next()
+                                    if (next != null) {
+                                        playVideo(next.path)
+                                    } else {
+                                        autoPlayHelloVideo()
+                                    }
+                                }
+                            }
+                            if (playbackState == Player.STATE_READY) {
+                                watchdog?.ping()
+                            }
+                        }
+
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            Log.e(TAG, "Player error: code=${error.errorCode} msg=${error.message}")
+                            recoverFromError()
+                        }
+
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            cachedIsPlaying = isPlaying
+                            if (isPlaying) watchdog?.ping()
+                        }
+
+                        override fun onPlaybackParametersChanged(parms: androidx.media3.common.PlaybackParameters) {
+                            playbackSpeed = parms.speed
+                        }
+                    })
+                }
+            playerView?.player = player
+            startWatchdog()
+            startPositionUpdater()
+        }
+        return player!!
+    }
+
+    private fun patchAmlogicHevcDecoder(infos: List<MediaCodecInfo>): List<MediaCodecInfo>? {
+        for (info in infos) {
+            if (info.name.contains("OMX.amlogic.hevc.decoder.awesome")) {
+                val videoCaps = info.capabilities?.videoCapabilities ?: continue
+                var modified = false
+                for (field in videoCaps::class.java.declaredFields) {
+                    if (field.type != Int::class.javaPrimitiveType) continue
+                    field.isAccessible = true
+                    when (field.name) {
+                        "mMaxWidth", "maxWidth" -> {
+                            if (field.getInt(videoCaps) < 7680) {
+                                field.setInt(videoCaps, 7680)
+                                modified = true
+                            }
+                        }
+                        "mMaxHeight", "maxHeight" -> {
+                            if (field.getInt(videoCaps) < 4320) {
+                                field.setInt(videoCaps, 4320)
+                                modified = true
+                            }
+                        }
+                        "mMaxPixels", "maxPixels" -> {
+                            if (field.getInt(videoCaps) < 33177600) {
+                                field.setInt(videoCaps, 33177600)
+                            }
+                        }
+                    }
+                }
+                if (modified) {
+                    val mutable = infos.toMutableList()
+                    mutable.remove(info)
+                    mutable.add(0, info)
+                    return mutable
+                }
+            }
+        }
+        return null
+    }
+
+    private fun startHttpUploadServer() {
+        try {
+            val dir = getDefaultDirectory()
+            httpUploadServer = HttpUploadServer(port = 8080, uploadDir = dir)
+            httpUploadServer?.start()
+            Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")
+        } catch (e: Exception) {
+            Log.w(TAG, "HttpUploadServer start failed: ${e.message}")
+        }
+    }
+
+    fun getHttpServerUrl(): String {
+        val ip = try {
+            val en = java.net.NetworkInterface.getNetworkInterfaces()
+            var found: String? = null
+            while (en.hasMoreElements()) {
+                val intf = en.nextElement()
+                if (intf.isLoopback || !intf.isUp) continue
+                val addrs = intf.inetAddresses ?: continue
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (a is java.net.Inet4Address) {
+                        found = a.hostAddress ?: continue
+                        if (!found!!.startsWith("127.")) break
+                    }
+                }
+                if (found != null && !found!!.startsWith("127.")) break
+            }
+            found ?: "127.0.0.1"
+        } catch (_: Exception) { "127.0.0.1" }
+        return "http://$ip:8080"
+    }
+
+    private var positionUpdaterJob: Job? = null
+
+    private fun startPositionUpdater() {
+        positionUpdaterJob?.cancel()
+        positionUpdaterJob = lifecycleScope.launch {
+            while (isActive) {
+                val p = player
+                if (p != null) {
+                    cachedPosition = p.currentPosition
+                    cachedIsPlaying = p.isPlaying
+                    cachedVolume = p.volume
+                }
+                kotlinx.coroutines.delay(500)
+            }
+        }
+    }
+
+    private fun recoverFromError() {
+        val path = currentVideoPath
+        player?.stop()
+        player?.clearMediaItems()
+        player?.release()
+        player = null
+
+        if (path != null) {
+            Log.d(TAG, "Recovering player for: $path")
+            initializePlayer()
+            try {
+                val mediaItem = MediaItem.fromUri(Uri.fromFile(File(path)))
+                player?.setMediaItem(mediaItem)
+                player?.prepare()
+                player?.play()
+            } catch (e: Exception) {
+                Log.e(TAG, "Recovery failed: ${e.message}")
+                autoPlayHelloVideo()
+            }
+        }
+    }
+
+    fun playVideo(path: String) {
+        runOnUiThread {
+            currentVideoPath = path
+            saveLastVideo(path)
+            Log.d(TAG, "playVideo: $path")
+
+            initializePlayer()
+            val exoPlayer = player ?: return@runOnUiThread
+
+            videoFrameRate = getFrameRate(path)
+
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+            val mediaItem = MediaItem.fromUri(Uri.fromFile(File(path)))
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.setPlaybackSpeed(playbackSpeed)
+            exoPlayer.prepare()
+            exoPlayer.play()
+
+            watchdog?.resetStallDetection()
+            hideSystemUI()
+        }
+    }
+
+    private fun getFrameRate(path: String): Double {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(path)
+            val fps = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+            retriever.release()
+            fps?.toDoubleOrNull() ?: 30.0
+        } catch (e: Exception) {
+            30.0
+        }
+    }
+
+    fun setVideoFrameRate(fps: Double) { videoFrameRate = fps }
+    fun getVideoFrameRate(): Double = videoFrameRate
+
+    fun pauseVideo() = runOnUiThread { player?.pause() }
+    fun resumeVideo() = runOnUiThread { player?.play() }
+
+    fun togglePause() {
+        runOnUiThread {
+            val p = player
+            if (p?.isPlaying == true) p.pause() else p?.play()
+        }
+    }
+
+    fun isPaused(): Boolean {
+        return !cachedIsPlaying
+    }
+
+    fun stopVideo() {
+        runOnUiThread {
+            player?.stop()
+            player?.clearMediaItems()
+            autoPlayHelloVideo()
+        }
+    }
+
+    fun stopAtFrame(frameNumber: Int) {
+        runOnUiThread {
+            val p = player ?: return@runOnUiThread
+            val fps = videoFrameRate.coerceAtLeast(1.0)
+            val positionMs = ((frameNumber - 1) / fps * 1000).toLong().coerceAtLeast(0)
+            p.seekTo(positionMs)
+            p.pause()
+        }
+    }
+
+    fun stopAtTime(seconds: Float) {
+        runOnUiThread {
+            val p = player ?: return@runOnUiThread
+            p.seekTo((seconds * 1000).toLong())
+            p.pause()
+        }
+    }
+
+    fun seekToTime(seconds: Float) {
+        runOnUiThread {
+            player?.seekTo((seconds * 1000).toLong())
+        }
+    }
+
+    fun setVolume(volume: Float) {
+        runOnUiThread { player?.volume = volume.coerceIn(0f, 1f) }
+    }
+
+    fun setLoop(enabled: Boolean) {
+        isLoopEnabled = enabled
+        prefs.edit().putBoolean(KEY_LOOP_ENABLED, enabled).apply()
+        runOnUiThread {
+            player?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        }
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        playbackSpeed = speed.coerceIn(0.25f, 4.0f)
+        runOnUiThread { player?.setPlaybackSpeed(playbackSpeed) }
+    }
+
+    fun getPlaybackSpeed(): Float = playbackSpeed
+
+    fun getFPS(): Double = videoFrameRate.coerceAtLeast(1.0)
+
+    fun getPosition(): Long = player?.currentPosition ?: 0L
+    fun getDuration(): Long = player?.duration ?: 0L
+
+    fun getVideoList(): List<VideoScanner.VideoItem> {
+        return videoScanner?.scanAllVideos() ?: emptyList()
+    }
+
+    fun getVideoInfo(): Map<String, Any> {
+        var width = 0; var height = 0; var duration = 0L
+        var frameRate = 30.0; var fileSize = 0L; var videoBitrate = 0
+        var audioSampleRate = 0; var channelCount = 2
+        val filename = currentVideoPath?.substringAfterLast("/") ?: ""
+
+        currentVideoPath?.let { path ->
+            try {
+                val file = File(path)
+                if (file.exists()) fileSize = file.length()
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(path)
+                width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                frameRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toDoubleOrNull() ?: 30.0
+                videoBitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
+                audioSampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull() ?: 0
+                retriever.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "getVideoInfo error: ${e.message}")
+            }
+        }
+
+        return mapOf(
+            "filename" to filename,
+            "fileSize" to fileSize,
+            "width" to width,
+            "height" to height,
+            "duration" to duration,
+            "frameRate" to frameRate,
+            "videoBitrate" to videoBitrate,
+            "audioSampleRate" to audioSampleRate,
+            "channelCount" to channelCount,
+            "isPlaying" to cachedIsPlaying,
+            "currentPosition" to cachedPosition,
+            "volume" to cachedVolume,
+            "speed" to playbackSpeed,
+            "loop" to isLoopEnabled
+        )
+    }
+
+    fun getDisplayInfo(): Map<String, Any> {
+        val dm = DisplayMetrics()
+        windowManager.defaultDisplay.getRealMetrics(dm)
+        val display = windowManager.defaultDisplay
+        val hdrCaps = display.hdrCapabilities
+        return mapOf<String, Any>(
+            "width" to dm.widthPixels,
+            "height" to dm.heightPixels,
+            "refreshRate" to display.refreshRate,
+            "hdrTypes" to (hdrCaps?.supportedHdrTypes?.joinToString(",") ?: "none"),
+            "colorMode" to (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) window.colorMode else 0)
+        )
+    }
+
+    fun setColorMode(mode: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.colorMode = mode
+        }
+    }
+
+    fun deleteVideo(path: String): Boolean {
+        return try { File(path).delete() } catch (e: Exception) { false }
+    }
+
+    fun showText(text: String, fontSize: Int, position: Int) {
+        runOnUiThread {
+            val textView = findViewById<TextView>(R.id.overlayText)
+            if (text.isEmpty() || text == "0") {
+                textView.visibility = View.GONE
+            } else {
+                textView.text = text
+                textView.textSize = fontSize.toFloat()
+                textView.visibility = View.VISIBLE
+                val gravity = when (position) {
+                    1 -> android.view.Gravity.TOP or android.view.Gravity.START
+                    2 -> android.view.Gravity.TOP or android.view.Gravity.END
+                    3 -> android.view.Gravity.BOTTOM or android.view.Gravity.START
+                    4 -> android.view.Gravity.BOTTOM or android.view.Gravity.END
+                    else -> android.view.Gravity.CENTER
+                }
+                textView.gravity = gravity
+            }
+        }
+    }
+
+    fun setSubtitle(path: String?) {
+        runOnUiThread {
+            val exoPlayer = player ?: return@runOnUiThread
+            val currentPath = currentVideoPath ?: return@runOnUiThread
+
+            if (path == null || path == "0" || path == "off") {
+                clearSubtitle(exoPlayer, currentPath)
+                return@runOnUiThread
+            }
+
+            val subtitleFile = File(path)
+            if (!subtitleFile.exists()) {
+                Log.w(TAG, "Subtitle file not found: $path")
+                return@runOnUiThread
+            }
+
+            val subtitleUri = Uri.fromFile(subtitleFile)
+            val baseItem = MediaItem.fromUri(Uri.fromFile(File(currentPath)))
+            val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(subtitleUri)
+                .setMimeType("text/x-microdvd")
+                .setLanguage("und")
+                .build()
+            val mediaItem = baseItem.buildUpon()
+                .setSubtitleConfigurations(listOf(subtitleConfig))
+                .build()
+
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
+            exoPlayer.play()
+        }
+    }
+
+    private fun clearSubtitle(exoPlayer: ExoPlayer, path: String) {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        val mediaItem = MediaItem.fromUri(Uri.fromFile(File(path)))
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        exoPlayer.play()
+    }
+
+    // --- Playlist ---
+    fun addToPlaylist(path: String) {
+        playlistManager.add(path)
+        if (playlistManager.size == 1) playVideo(path)
+    }
+
+    fun playAndAddToPlaylist(path: String) {
+        if (!playlistManager.setCurrentByPath(path)) {
+            playlistManager.add(path)
+        }
+        playVideo(path)
+    }
+
+    fun removeFromPlaylist(index: Int) {
+        playlistManager.remove(index)
+    }
+
+    fun clearPlaylist() { playlistManager.clear() }
+
+    fun rebuildPlaylist() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val videos = videoScanner?.scanAllVideos() ?: return@launch
+            val paths = videos.map { it.path }
+            withContext(Dispatchers.Main) {
+                playlistManager.clear()
+                playlistManager.addAll(paths)
+                Log.d(TAG, "Playlist rebuilt: ${videos.size} videos")
+            }
+        }
+    }
+
+    fun playNext() {
+        if (playlistManager.size == 0) { Toast.makeText(this, "无播放列表", Toast.LENGTH_SHORT).show(); return }
+        val next = playlistManager.next()
+        if (next != null) playVideo(next.path)
+    }
+
+    fun playPrevious() {
+        if (playlistManager.size == 0) { Toast.makeText(this, "无播放列表", Toast.LENGTH_SHORT).show(); return }
+        val prev = playlistManager.previous()
+        if (prev != null) playVideo(prev.path)
+    }
+
+    fun jumpToPlaylistIndex(index: Int) {
+        val item = playlistManager.jumpTo(index)
+        if (item != null) playVideo(item.path)
+    }
+
+    fun setPlaylistMode(mode: String) {
+        playlistManager.setRepeatModeFromString(mode)
+    }
+
+    fun getPlaylistMode(): String = playlistManager.repeatMode.name.lowercase()
+
+    fun getPlaylistItems(): List<Map<String, Any>> = playlistManager.getPlaylistSnapshot()
+
+    fun getPlaylistStatus(): Map<String, Any> = mapOf(
+        "index" to playlistManager.currentItemIndex,
+        "size" to playlistManager.size,
+        "mode" to getPlaylistMode()
+    )
+
+    // --- Subtitle ---
+    private var subtitlePath: String? = null
+
+    // --- Default Directory ---
+    fun getDefaultDirectory(): String {
+        return prefs.getString(KEY_DEFAULT_DIR, null)
+            ?: Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
+    }
+
+    fun setDefaultDirectory(path: String) {
+        prefs.edit().putString(KEY_DEFAULT_DIR, path).apply()
+        videoScanner?.invalidateCache()
+        videoScanner?.watchDirectory(File(path))
+        rebuildPlaylist()
+        Log.d(TAG, "Default directory set to: $path, playlist rebuilt")
+    }
+
+    fun reloadVideos() {
+        videoScanner?.invalidateCache()
+        rebuildPlaylist()
+        Log.d(TAG, "Video cache cleared, playlist rebuilt")
+    }
+
+    fun restartPlayer() {
+        runOnUiThread {
+            player?.stop()
+            player?.clearMediaItems()
+            player?.seekTo(0)
+            player?.prepare()
+            player?.play()
+        }
+    }
+
+    // --- Watchdog ---
+    fun watchdogStart() {
+        if (watchdog == null) {
+            watchdog = Watchdog { player }
+            watchdog?.start { recoverFromError() }
+        }
+    }
+
+    fun watchdogStop() {
+        watchdog?.stop()
+        watchdog = null
+    }
+
+    fun watchdogPing() {
+        watchdog?.ping()
+    }
+
+    private fun startWatchdog() {
+        if (watchdog == null) {
+            watchdog = Watchdog { player }
+            watchdog?.start { recoverFromError() }
+        }
+    }
+
+    // --- Schedule ---
+    private fun startScheduleChecker() {
+        scheduleJob?.cancel()
+        scheduleJob = lifecycleScope.launch {
+            while (isActive) {
+                checkSchedule()
+                delay(30_000L)
+            }
+        }
+    }
+
+    private suspend fun checkSchedule() {
+        val now = Calendar.getInstance()
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        scheduleStartTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) {
+                    withContext(Dispatchers.Main) {
+                        if (currentVideoPath == null) autoPlayHelloVideo()
+                    }
+                }
+            }
+        }
+
+        scheduleStopTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) {
+                    withContext(Dispatchers.Main) {
+                        player?.pause()
+                    }
+                }
+            }
+        }
+    }
+
+    fun scheduleStart(time: String) {
+        scheduleStartTime = time
+        prefs.edit().putString(KEY_SCHEDULE_START, time).apply()
+        Log.d(TAG, "Schedule start set to $time")
+    }
+
+    fun scheduleStop(time: String) {
+        scheduleStopTime = time
+        prefs.edit().putString(KEY_SCHEDULE_STOP, time).apply()
+        Log.d(TAG, "Schedule stop set to $time")
+    }
+
+    fun scheduleClear() {
+        scheduleStartTime = null
+        scheduleStopTime = null
+        prefs.edit()
+            .remove(KEY_SCHEDULE_START)
+            .remove(KEY_SCHEDULE_STOP)
+            .apply()
+        Log.d(TAG, "Schedule cleared")
+    }
+
+    fun getScheduleStatus(): String {
+        return buildString {
+            scheduleStartTime?.let { append("start=$it ") }
+            scheduleStopTime?.let { append("stop=$it ") }
+            if (isEmpty()) append("no schedule")
+        }
+    }
+
+    // --- Power Management ---
+    private fun startPowerScheduleChecker() {
+        powerScheduleJob?.cancel()
+        powerScheduleJob = lifecycleScope.launch {
+            while (isActive) {
+                checkPowerSchedule()
+                delay(60_000L)
+            }
+        }
+    }
+
+    private suspend fun checkPowerSchedule() {
+        val now = Calendar.getInstance()
+        val currentMinutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+        powerOnTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) powerOn()
+            }
+        }
+
+        powerOffTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) powerOff()
+            }
+        }
+    }
+
+    fun powerOn() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                pm.isPowerSaveMode
+            }
+            val wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "OSCPlayer:PowerOn"
+            )
+            wl.acquire(10000)
+            wl.release()
+            Log.d(TAG, "Display power ON requested")
+        } catch (e: Exception) {
+            Log.e(TAG, "Power on failed: ${e.message}")
+        }
+    }
+
+    fun powerOff() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val goToSleep = android.provider.Settings::class.java.getMethod(
+                "putInt",
+                android.content.ContentResolver::class.java,
+                String::class.java,
+                Int::class.java
+            )
+            Log.d(TAG, "Display power OFF requested")
+
+            runOnUiThread {
+                player?.pause()
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                try {
+                    val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OSCPlayer:Background")
+                    wl.acquire(5000)
+                    wl.release()
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Wake lock error: ${e2.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Power off failed: ${e.message}")
+        }
+    }
+
+    fun schedulePowerOn(time: String) {
+        powerOnTime = time
+        prefs.edit().putString(KEY_POWER_ON, time).apply()
+        Log.d(TAG, "Power ON scheduled at $time")
+    }
+
+    fun schedulePowerOff(time: String) {
+        powerOffTime = time
+        prefs.edit().putString(KEY_POWER_OFF, time).apply()
+        Log.d(TAG, "Power OFF scheduled at $time")
+    }
+
+    fun schedulePowerClear() {
+        powerOnTime = null
+        powerOffTime = null
+        prefs.edit().remove(KEY_POWER_ON).remove(KEY_POWER_OFF).apply()
+        Log.d(TAG, "Power schedule cleared")
+    }
+
+    fun takeScreenshot(): String? {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var result: String? = null
+        runOnUiThread {
+            try {
+                val view = window.decorView
+                val bitmap = android.graphics.Bitmap.createBitmap(
+                    view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                val canvas = android.graphics.Canvas(bitmap)
+                view.draw(canvas)
+                val dir = File(getDefaultDirectory(), ".screenshots")
+                dir.mkdirs()
+                val file = File(dir, "screenshot_${System.currentTimeMillis()}.png")
+                val out = java.io.FileOutputStream(file)
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                out.close()
+                bitmap.recycle()
+                result = file.absolutePath
+                Log.d(TAG, "Screenshot saved: ${file.absolutePath}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Screenshot failed: ${e.message}")
+            }
+            latch.countDown()
+        }
+        latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+        return result
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
+        if (event != null) {
+            Log.d(TAG, "dispatchKeyEvent keyCode=${event.keyCode} action=${event.action}")
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val kc = event.keyCode
+                if (kc == KeyEvent.KEYCODE_DPAD_UP || kc == KeyEvent.KEYCODE_CHANNEL_UP || kc == KeyEvent.KEYCODE_DPAD_DOWN || kc == KeyEvent.KEYCODE_CHANNEL_DOWN)
+                    return onKeyDown(kc, event)
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        Log.d(TAG, "onKeyDown keyCode=$keyCode action=${event?.action}")
+        val step = 10000L
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { playPrevious(); true }
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> { playNext(); true }
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                player?.let { it.seekTo(maxOf(0L, it.currentPosition - step)) }
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                player?.let { it.seekTo(minOf(it.duration, it.currentPosition + step)) }
+                true
+            }
+            KeyEvent.KEYCODE_MENU -> { showMainMenu(); true }
+            KeyEvent.KEYCODE_INFO -> { openAboutActivity(); true }
+            KeyEvent.KEYCODE_FORWARD_DEL -> { deleteCurrentVideo(); true }
+            KeyEvent.KEYCODE_HOME -> { returnToSystemLauncher(); true }
+            KeyEvent.KEYCODE_BACK -> { finish(); true }
+            else -> super.onKeyDown(keyCode, event)
+        }
+    }
+
+    fun returnToSystemLauncher() {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Return to launcher failed: ${e.message}")
+        }
+    }
+
+    private fun showMainMenu() {
+        val items = arrayOf("检索视频", "视频信息", "关于", "设为默认桌面", "返回系统桌面")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("菜单")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> openSearchActivity()
+                    1 -> showVideoInfo()
+                    2 -> openAboutActivity()
+                    3 -> setAsDefaultLauncher()
+                    4 -> returnToSystemLauncher()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun setAsDefaultLauncher() {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) }
+            startActivity(intent)
+            Toast.makeText(this, "请选择OSCVideoPlayer并设为默认", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Set default failed: ${e.message}")
+        }
+    }
+
+    private fun tryAutoSetDefaultLauncher(): Boolean {
+        try {
+            Runtime.getRuntime().exec(arrayOf(
+                "cmd", "role", "add-role-holder",
+                "android.app.role.HOME", packageName
+            )).waitFor()
+            Log.d(TAG, "Auto-set default launcher via cmd role")
+            return true
+        } catch (_: Exception) {}
+
+        return false
+    }
+
+    private fun showSetDefaultLauncherDialog() {
+        if (tryAutoSetDefaultLauncher()) return
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("设为默认桌面")
+            .setMessage("是否将OSCVideoPlayer设为默认桌面？\n\n设为默认后，电视开机将自动启动本应用。\n\n选择\"设为默认\"后，在弹出的界面中选择OSCVideoPlayer，并勾选\"默认\"。")
+            .setPositiveButton("设为默认") { _, _ -> setAsDefaultLauncher() }
+            .setNegativeButton("稍后再说", null)
+            .show()
+    }
+
+    private fun showVideoInfo() {
+        val info = getVideoInfo()
+        val filename = info["filename"] as? String ?: ""
+        val fileSize = info["fileSize"] as? Long ?: 0L
+        val width = info["width"] as? Int ?: 0
+        val height = info["height"] as? Int ?: 0
+        val duration = info["duration"] as? Long ?: 0L
+        val frameRate = info["frameRate"] as? Double ?: 30.0
+        val videoBitrate = info["videoBitrate"] as? Int ?: 0
+        val audioSampleRate = info["audioSampleRate"] as? Int ?: 0
+        val isPlaying = info["isPlaying"] as? Boolean ?: false
+        val pos = info["currentPosition"] as? Long ?: 0L
+        val volume = info["volume"] as? Float ?: 0f
+        val speed = info["speed"] as? Float ?: 1.0f
+
+        val fileSizeStr = when {
+            fileSize >= 1L shl 30 -> String.format("%.2f GB", fileSize / (1L shl 30).toDouble())
+            fileSize >= 1L shl 20 -> String.format("%.2f MB", fileSize / (1L shl 20).toDouble())
+            fileSize >= 1L shl 10 -> String.format("%.2f KB", fileSize / (1L shl 10).toDouble())
+            else -> "$fileSize B"
+        }
+
+        val infoText = buildString {
+            appendLine("文件名: $filename")
+            appendLine("大小: $fileSizeStr")
+            if (width > 0 && height > 0) appendLine("分辨率: $width x $height")
+            if (frameRate > 0) appendLine("帧率: ${String.format("%.2f", frameRate)} FPS")
+            if (videoBitrate > 0) appendLine("码率: ${videoBitrate / 1000} Kbps")
+            if (audioSampleRate > 0) appendLine("音频: ${audioSampleRate / 1000} kHz")
+            appendLine("时长: ${duration / 1000}s")
+            appendLine("位置: ${pos / 1000}s")
+            appendLine("音量: ${(volume * 100).toInt()}%")
+            appendLine("速度: ${String.format("%.2f", speed)}x")
+            appendLine("循环: ${if (isLoopEnabled) "开" else "关"}")
+            append("播放: ${if (isPlaying) "是" else "否"}")
+        }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("视频信息")
+            .setMessage(infoText)
+            .setPositiveButton("确定", null)
+            .show()
+    }
+
+    private fun deleteCurrentVideo() {
+        val videoPath = currentVideoPath ?: return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("删除视频")
+            .setMessage("确定删除?\n${videoPath.substringAfterLast("/")}")
+            .setPositiveButton("删除") { _, _ ->
+                if (File(videoPath).delete()) {
+                    Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show()
+                    currentVideoPath = null
+                    stopVideo()
+                } else {
+                    Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    fun openSearchActivity() {
+        startActivity(Intent(this, SearchActivity::class.java))
+    }
+
+    fun openAboutActivity() {
+        startActivity(Intent(this, AboutActivity::class.java))
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        watchdogStop()
+        positionUpdaterJob?.cancel()
+        scheduleJob?.cancel()
+        powerScheduleJob?.cancel()
+        ScreenReceiver.unregister(this)
+        unregisterNsdService()
+        player?.release()
+        player = null
+        httpUploadServer?.stop()
+        httpUploadServer = null
+        videoScanner?.stopWatching()
+    }
+}
