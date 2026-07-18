@@ -1,7 +1,8 @@
 # OSCVideoPlayer v2.0
 
 Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
-专为展览展示/数字标牌场景设计, 兼容全志/瑞芯微等低端设备.
+专为展览展示/数字标牌场景设计, 兼容Allwinner/Rockchip/Amlogic等设备.
+采用MIT开源许可, 同行放心大胆使用.
 
 ## 功能
 
