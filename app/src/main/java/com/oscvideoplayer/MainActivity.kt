@@ -1510,16 +1510,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteCurrentVideo() {
         val videoPath = currentVideoPath ?: return
-        val fileManager = FileManager(this)
-        if (!fileManager.canDeleteFile(videoPath)) {
-            val name = videoPath.substringAfterLast("/")
-            if (!videoPath.contains("/emulated/")) {
-                Toast.makeText(this, "外部存储文件不可删除 (仅可删除播放器写入的文件)", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "删除失败: 无权限", Toast.LENGTH_SHORT).show()
-            }
+        // 外部存储: 只读不删
+        if (com.oscvideoplayer.FileManager.isExternalPath(videoPath)) {
+            Toast.makeText(this, "外部存储文件不可删除", Toast.LENGTH_SHORT).show()
             return
         }
+        val fileManager = FileManager(this)
         android.app.AlertDialog.Builder(this)
             .setTitle("删除视频")
             .setMessage("确定删除?\n${videoPath.substringAfterLast("/")}")
