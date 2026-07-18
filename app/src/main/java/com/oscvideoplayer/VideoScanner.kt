@@ -48,7 +48,7 @@ class VideoScanner(private val context: Context) {
         scanInternalStorage(videos)
         scanUSBStorage(videos)
 
-        val sorted = videos.sortedByDescending { it.size }
+        val sorted = videos.sortedBy { it.name.lowercase() }
         cachedVideos = sorted
         cacheTime = now
         return sorted
@@ -87,7 +87,7 @@ class VideoScanner(private val context: Context) {
     fun scanDirectory(dir: File, isUSB: Boolean): List<VideoItem> {
         val result = mutableListOf<VideoItem>()
         scanDirectoryRecursive(dir, result, isUSB)
-        return result
+        return result.sortedBy { it.name.lowercase() }
     }
 
     private fun scanInternalStorage(list: MutableSet<VideoItem>) {

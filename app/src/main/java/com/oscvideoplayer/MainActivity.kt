@@ -662,7 +662,6 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             player?.stop()
             player?.clearMediaItems()
-            autoPlayHelloVideo()
         }
     }
 
@@ -687,6 +686,15 @@ class MainActivity : AppCompatActivity() {
     fun seekToTime(seconds: Float) {
         runOnUiThread {
             player?.seekTo((seconds * 1000).toLong())
+        }
+    }
+
+    fun seekToMs(ms: Long) {
+        runOnUiThread {
+            val p = player ?: return@runOnUiThread
+            val wasPlaying = p.isPlaying
+            p.seekTo(ms)
+            if (!wasPlaying) p.pause()
         }
     }
 

@@ -240,48 +240,23 @@ class OSCServer(
             }
 
             "stop" -> {
-                val param = parts.getOrNull(1) ?: ""
-                val arg = if (param.isEmpty() && msg.args.isNotEmpty()) msg.args[0]?.toString() ?: "" else param
-
-                when {
-                    arg == "exit" -> {
-                        mainActivity?.stopVideo()
-                        mainActivity?.finish()
-                        return
-                    }
-                    arg == "shutdown" -> { sendShutdown(); return }
-                    arg == "reboot" -> { sendReboot(); return }
-                    arg == "hello" -> {
-                        mainActivity?.stopVideo()
-                        response = OSCMessage("/Stopped", listOf("hello"))
-                    }
-                    arg.isEmpty() -> {
-                        mainActivity?.stopVideo()
-                        response = OSCMessage("/Stopped", listOf(""))
-                    }
-                    arg.contains(".") -> {
-                        val seconds = arg.toFloatOrNull() ?: 0f
-                        mainActivity?.stopAtTime(seconds)
-                        response = OSCMessage("/Stopped", listOf("${seconds}s"))
-                    }
-                    else -> {
-                        val frameNum = arg.toIntOrNull() ?: 0
-                        mainActivity?.stopAtFrame(frameNum)
-                        response = OSCMessage("/Stopped", listOf("$frameNum"))
-                    }
-                }
+                mainActivity?.stopVideo()
+                response = OSCMessage("/Stopped", listOf(""))
             }
 
             "pause" -> {
-                val param = parts.getOrNull(1) ?: ""
-                val value = if (param.isEmpty() && msg.args.isNotEmpty()) {
-                    (msg.args[0] as? Number)?.toInt() ?: -1
-                } else param.toIntOrNull() ?: -1
-
-                when (value) {
-                    0 -> mainActivity?.resumeVideo()
-                    1 -> mainActivity?.pauseVideo()
-                    else -> mainActivity?.togglePause()
+                val sub = parts.getOrNull(1) ?: ""
+                if (sub == "toggle") {
+                    mainActivity?.togglePause()
+                } else {
+                    val value = if (sub.isEmpty() && msg.args.isNotEmpty()) {
+                        (msg.args[0] as? Number)?.toInt() ?: -1
+                    } else sub.toIntOrNull() ?: -1
+                    when (value) {
+                        0 -> mainActivity?.resumeVideo()
+                        1 -> mainActivity?.pauseVideo()
+                        else -> mainActivity?.togglePause()
+                    }
                 }
                 response = OSCMessage("/Paused", listOf(mainActivity?.isPaused() == true))
             }
@@ -296,32 +271,14 @@ class OSCServer(
                 response = OSCMessage("/Volume", listOf("${(volume * 100).toInt()}%"))
             }
 
-            "loop" -> {
-                var enable = true
-                val param = parts.getOrNull(1) ?: ""
-                if (param.isNotEmpty()) enable = param.toIntOrNull() != 0
-                else if (msg.args.isNotEmpty()) enable = (msg.args[0] as? Number)?.toInt() != 0
-                mainActivity?.setLoop(enable)
-                response = OSCMessage("/Loop", listOf(enable))
-            }
-
             "seek" -> {
-                var param = parts.getOrNull(1) ?: ""
-                if (param.isEmpty() && msg.args.isNotEmpty()) {
-                    param = (msg.args[0] as? Number)?.toString() ?: ""
-                }
-                when {
-                    param.startsWith("-") -> {
-                        val seconds = kotlin.math.abs(param.toFloatOrNull() ?: 0f)
-                        mainActivity?.seekToTime(-seconds)
-                        response = OSCMessage("/SeekTo", listOf("-${seconds}s"))
-                    }
-                    param.isNotEmpty() -> {
-                        val seconds = param.toFloatOrNull() ?: 0f
-                        mainActivity?.seekToTime(seconds)
-                        response = OSCMessage("/SeekTo", listOf("${seconds}s"))
-                    }
-                    else -> response = OSCMessage("/Error", listOf("seek requires time"))
+                val ms = if (parts.size > 1) parts[1].toLongOrNull()
+                         else (msg.args.getOrNull(0) as? Number)?.toLong()
+                if (ms != null && ms >= 0) {
+                    mainActivity?.seekToMs(ms)
+                    response = OSCMessage("/SeekTo", listOf("${ms}ms"))
+                } else {
+                    response = OSCMessage("/Error", listOf("seek requires ms >= 0"))
                 }
             }
 
@@ -372,11 +329,11 @@ class OSCServer(
                         mainActivity?.playPrevious()
                         response = OSCMessage("/PlaylistPrev", listOf())
                     }
-                    "jump" -> {
+                    "index" -> {
                         val idx = parts.getOrNull(2)?.toIntOrNull() ?: -1
                         if (idx >= 0) {
                             mainActivity?.jumpToPlaylistIndex(idx)
-                            response = OSCMessage("/PlaylistJump", listOf(idx))
+                            response = OSCMessage("/PlaylistIndex", listOf(idx))
                         } else response = OSCMessage("/Error", listOf("Invalid index"))
                     }
                     "mode" -> {
@@ -386,10 +343,10 @@ class OSCServer(
                             response = OSCMessage("/PlaylistMode", listOf(mode))
                         } else response = OSCMessage("/PlaylistMode", listOf(mainActivity?.getPlaylistMode() ?: "all"))
                     }
-                    "list" -> {
+                    "get" -> {
                         val items = mainActivity?.getPlaylistItems() ?: emptyList()
-                        val names = items.map { it["name"] as? String ?: "" }
-                        response = OSCMessage("/Playlist", listOf(names.joinToString("\n")))
+                        val lines = items.mapIndexed { i, it -> "$i: ${it["name"]}" }
+                        response = OSCMessage("/Playlist", listOf(lines.joinToString("\n")))
                     }
                     else -> response = OSCMessage("/Error", listOf("Unknown playlist command"))
                 }
@@ -504,43 +461,20 @@ class OSCServer(
             }
 
             "fps" -> {
-                var param = parts.getOrNull(1) ?: ""
-                if (param.isEmpty() && msg.args.isNotEmpty()) param = msg.args[0]?.toString() ?: ""
-                val value = param.toIntOrNull() ?: -1
-                if (value > 0) {
-                    mainActivity?.setVideoFrameRate(value.toDouble())
-                    response = OSCMessage("/FPS", listOf(value))
-                } else if (value == 0) {
-                    response = OSCMessage("/FPS", listOf("OFF"))
-                } else {
-                    response = OSCMessage("/FPS", listOf(mainActivity?.getVideoFrameRate() ?: 30.0))
-                }
-            }
-
-            "list" -> {
-                var subCmd = parts.getOrNull(1) ?: ""
-                if (subCmd.isEmpty() && msg.args.isNotEmpty()) subCmd = msg.args[0]?.toString() ?: ""
-                when (subCmd) {
-                    "videos" -> {
-                        val videos = mainActivity?.getVideoList() ?: emptyList()
-                        response = OSCMessage("/Videos", listOf(videos.joinToString("\n") { it.name }))
-                    }
-                    "audio" -> response = OSCMessage("/AudioList", listOf("No audio devices"))
-                    "display" -> response = OSCMessage("/DisplayList", listOf("Display 0"))
-                    "usb", "external" -> {
-                        val usbDirs = fileManager?.getUSBStorages() ?: emptyList()
-                        val items = mutableListOf<String>()
-                        for (dir in usbDirs) {
-                            val videos = fileManager?.getVideos(dir.absolutePath) ?: emptyList()
-                            for (v in videos) {
-                                items.add("[${dir.name}] ${v.name}")
-                            }
+                val sub = parts.getOrNull(1) ?: ""
+                when (sub) {
+                    "set" -> {
+                        val value = if (msg.args.isNotEmpty()) (msg.args[0] as? Number)?.toInt() ?: -1 else -1
+                        if (value > 0) {
+                            mainActivity?.setVideoFrameRate(value.toDouble())
+                            response = OSCMessage("/FPS", listOf(value))
+                        } else {
+                            response = OSCMessage("/Error", listOf("Usage: /fps/set with frame rate arg"))
                         }
-                        response = OSCMessage("/ExternalVideos", listOf(
-                            if (items.isEmpty()) "No external videos found" else items.joinToString("\n")
-                        ))
                     }
-                    else -> response = OSCMessage("/Error", listOf("Unknown list command"))
+                    else -> {
+                        response = OSCMessage("/FPS", listOf(mainActivity?.getVideoFrameRate() ?: 30.0))
+                    }
                 }
             }
 
@@ -678,10 +612,6 @@ class OSCServer(
                             response = OSCMessage("/Config", listOf("watchdog=on"))
                         }
                     }
-                    "restart" -> {
-                        response = OSCMessage("/Config", listOf("restarting"))
-                        mainActivity?.restartPlayer()
-                    }
                     "startup" -> {
                         val name = if (value.isNotEmpty()) value
                         else if (msg.args.isNotEmpty()) msg.args[0]?.toString() ?: ""
@@ -772,6 +702,17 @@ class OSCServer(
                         mainActivity?.powerOff()
                         response = OSCMessage("/Power", listOf("off"))
                     }
+                    "restart" -> {
+                        response = OSCMessage("/Power", listOf("restarting"))
+                        mainActivity?.restartPlayer()
+                    }
+                    "exit" -> {
+                        mainActivity?.stopVideo()
+                        mainActivity?.finish()
+                        return
+                    }
+                    "shutdown" -> { sendShutdown(); return }
+                    "reboot" -> { sendReboot(); return }
                     "schedule" -> {
                         val action = parts.getOrNull(2) ?: ""
                         val time = parts.getOrNull(3) ?: ""
@@ -812,20 +753,20 @@ class OSCServer(
                     appendLine("=== OSCVideoPlayer v2.0 ===")
                     appendLine("Playback:")
                     appendLine("  /play[name]       Play video (optional name)")
-                    appendLine("  /stop[/time|frame] Stop playback")
-                    appendLine("  /pause[/0|1]      Toggle/resume/pause")
+                    appendLine("  /stop             Stop playback, black screen")
+                    appendLine("  /pause/toggle     Toggle play/pause")
+                    appendLine("  /pause[0|1]       0=resume, 1=pause")
                     appendLine("  /volume/0.0-1.0   Set volume")
-                    appendLine("  /seek/seconds     Seek to time")
+                    appendLine("  /seek/ms          Seek to position (ms)")
                     appendLine("  /speed/0.5-4.0    Set playback speed")
-                    appendLine("  /loop[/0|1]       Toggle loop")
                     appendLine("Playlist:")
                     appendLine("  /playlist/add/name   Add to playlist")
                     appendLine("  /playlist/remove/idx Remove from playlist")
                     appendLine("  /playlist/clear      Clear playlist")
                     appendLine("  /playlist/next|prev  Navigate playlist")
-                    appendLine("  /playlist/jump/idx   Jump to index")
-                    appendLine("  /playlist/mode/0|1|2|3  Repeat mode")
-                    appendLine("  /playlist/list       List playlist")
+                    appendLine("  /playlist/index/idx  Jump to index")
+                    appendLine("  /playlist/mode/0|1|2|3  Playlist mode")
+                    appendLine("  /playlist/get        Get full playlist with indices")
                     appendLine("Display:")
                     appendLine("  /tct/text/size/pos  Show text overlay")
                     appendLine("  /fullscreen         Fullscreen")
@@ -835,17 +776,15 @@ class OSCServer(
                     appendLine("  /info[/name]        Video info (optional name)")
                     appendLine("  /info/display       Show display capabilities")
                     appendLine("  /status             Full status")
-                    appendLine("  /list/videos        List videos")
-                    appendLine("  /list/external      List external videos (USB/SD)")
-                    appendLine("  /fps                Get/set FPS")
+                    appendLine("  /fps                Get FPS")
+                    appendLine("  /fps/set/rate       Set FPS")
                     appendLine("Config:")
                     appendLine("  /config/dir[/path]  Get/set default dir")
                     appendLine("  /config/watchdog[/0|1]  Toggle watchdog")
                     appendLine("  /config/heartbeat   Ping watchdog")
                     appendLine("  /config/reload      Rescan videos")
-                    appendLine("  /config/restart     Restart player")
                     appendLine("  /config/startup/name  Set startup video")
-                    appendLine("  /config/display/mode/N  Set color mode (0=SDR, 1=wide, 2=HDR)")
+                    appendLine("  /config/display/mode/N  Set color mode")
                     appendLine("  /config/display/info    Show display info")
                     appendLine("Schedule:")
                     appendLine("  /schedule/start/HH:mm  Set start time")
@@ -853,6 +792,10 @@ class OSCServer(
                     appendLine("  /schedule/clear        Clear schedule")
                     appendLine("Power:")
                     appendLine("  /power/on|off         Display power")
+                    appendLine("  /power/restart        Restart player")
+                    appendLine("  /power/exit           Exit app")
+                    appendLine("  /power/shutdown       Shutdown device")
+                    appendLine("  /power/reboot         Reboot device")
                     appendLine("  /power/schedule/on|off/HH:mm")
                     appendLine("File:")
                     appendLine("  /rm/name              Delete video")
@@ -863,15 +806,10 @@ class OSCServer(
                     appendLine("  /help                 Show this help")
                     appendLine("System:")
                     appendLine("  /launcher             Return to system launcher")
-                    appendLine("  /stop/exit            Exit app")
-                    appendLine("  /shutdown   Shutdown device")
-                    appendLine("  /reboot     Reboot device")
                 }
                 response = OSCMessage("/Help", listOf(helpText))
             }
 
-            "shutdown" -> { sendShutdown(); return }
-            "reboot" -> { sendReboot(); return }
             "launcher" -> {
                 mainActivity?.returnToSystemLauncher()
                 response = OSCMessage("/Launcher", listOf("ok"))
