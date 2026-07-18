@@ -1322,96 +1322,70 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun takeScreenshot(onDone: ((String?) -> Unit)? = null) {
-        val currentPath = activeVideoPath
-        if (currentPath != null) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val pos = withContext(Dispatchers.Main) { player?.currentPosition ?: 0L }
-                // pause player to free hardware decoder for retriever
-                val wasPlaying = withContext(Dispatchers.Main) {
-                    val p = player
-                    if (p?.isPlaying == true) { p.pause(); true } else false
-                }
-                // 1. MediaMetadataRetriever (simple path, works on most devices)
-                var ok = false
+        lifecycleScope.launch(Dispatchers.IO) {
+            var ok = false
+            // 1. TextureView.getBitmap() (works with texture_view surface type)
+            if (!ok) {
                 try {
-                    val retriever = android.media.MediaMetadataRetriever()
-                    retriever.setDataSource(currentPath)
-                    for ((opt, us) in arrayOf(
-                        android.media.MediaMetadataRetriever.OPTION_CLOSEST to pos * 1000,
-                        android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC to pos * 1000,
-                    )) {
-                        val bmp = retriever.getFrameAtTime(us, opt)
-                        if (bmp != null && !isAllBlack(bmp)) {
-                            retriever.release()
-                            val path = saveScreenshotBitmap(bmp)
-                            bmp.recycle()
-                            if (path != null) { ok = true; onDone?.invoke(path) }
-                            break
-                        }
-                    }
-                } catch (_: Exception) {}
-                // resume playback after retriever
-                if (wasPlaying) withContext(Dispatchers.Main) { player?.play() }
-                // 2. PixelCopy from Window (API 26+, best effort on texture_view)
-                if (!ok && Build.VERSION.SDK_INT >= 26) {
-                    val pv = playerView ?: return@launch
-                    try {
-                        val bmp = withContext(Dispatchers.Main) {
-                            val w = pv.width; val h = pv.height
-                            if (w <= 0 || h <= 0) null
-                            else android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                        } ?: return@launch
-                        val success = suspendCancellableCoroutine<Boolean> { cont ->
-                            android.view.PixelCopy.request(window, bmp,
-                                { result ->
-                                    if (result == android.view.PixelCopy.SUCCESS) {
-                                        val path = saveScreenshotBitmap(bmp)
-                                        bmp.recycle()
-                                        if (path != null) { ok = true; onDone?.invoke(path) }
-                                    }
-                                    cont.resume(result == android.view.PixelCopy.SUCCESS, null)
-                                },
-                                android.os.Handler(android.os.Looper.getMainLooper()))
-                            cont.invokeOnCancellation { bmp.recycle() }
-                        }
-                        if (!success) bmp.recycle()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "PixelCopy error: ${e.message}")
-                    }
-                }
-                // 3. decorView fallback
-                if (!ok) {
-                    try {
-                        withContext(Dispatchers.Main) {
-                            val v = window.decorView
-                            if (v.width > 0 && v.height > 0) {
-                                val bmp = android.graphics.Bitmap.createBitmap(
-                                    v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
-                                v.draw(android.graphics.Canvas(bmp))
+                    withContext(Dispatchers.Main) {
+                        val pv = playerView ?: return@withContext
+                        val tv = pv.videoSurfaceView as? android.view.TextureView
+                        if (tv != null) {
+                            val bmp = tv.bitmap
+                            if (bmp != null) {
                                 val path = saveScreenshotBitmap(bmp)
                                 bmp.recycle()
-                                onDone?.invoke(path)
-                            } else { onDone?.invoke(null) }
+                                if (path != null) { ok = true; onDone?.invoke(path) }
+                            }
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "DecorView screenshot failed: ${e.message}")
-                        onDone?.invoke(null)
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "TextureView bitmap error: ${e.message}")
                 }
             }
-        } else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
+            // 2. PixelCopy from Window (API 26+, works with texture_view)
+            if (!ok && Build.VERSION.SDK_INT >= 26) {
+                val pv = playerView ?: return@launch
                 try {
-                    val v = window.decorView
-                    if (v.width <= 0 || v.height <= 0) { onDone?.invoke(null); return@post }
-                    val bmp = android.graphics.Bitmap.createBitmap(
-                        v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
-                    v.draw(android.graphics.Canvas(bmp))
-                    val path = saveScreenshotBitmap(bmp)
-                    bmp.recycle()
-                    onDone?.invoke(path)
+                    val bmp = withContext(Dispatchers.Main) {
+                        val w = pv.width; val h = pv.height
+                        if (w <= 0 || h <= 0) null
+                        else android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                    } ?: return@launch
+                    val success = suspendCancellableCoroutine<Boolean> { cont ->
+                        android.view.PixelCopy.request(window, bmp,
+                            { result ->
+                                if (result == android.view.PixelCopy.SUCCESS) {
+                                    val path = saveScreenshotBitmap(bmp)
+                                    bmp.recycle()
+                                    if (path != null) { ok = true; onDone?.invoke(path) }
+                                }
+                                cont.resume(result == android.view.PixelCopy.SUCCESS, null)
+                            },
+                            android.os.Handler(android.os.Looper.getMainLooper()))
+                        cont.invokeOnCancellation { bmp.recycle() }
+                    }
+                    if (!success) bmp.recycle()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Screenshot error: ${e.message}")
+                    Log.e(TAG, "PixelCopy error: ${e.message}")
+                }
+            }
+            // 3. decorView fallback
+            if (!ok) {
+                try {
+                    withContext(Dispatchers.Main) {
+                        val v = window.decorView
+                        if (v.width > 0 && v.height > 0) {
+                            val bmp = android.graphics.Bitmap.createBitmap(
+                                v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+                            v.draw(android.graphics.Canvas(bmp))
+                            val path = saveScreenshotBitmap(bmp)
+                            bmp.recycle()
+                            onDone?.invoke(path)
+                        } else { onDone?.invoke(null) }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "DecorView screenshot failed: ${e.message}")
                     onDone?.invoke(null)
                 }
             }
