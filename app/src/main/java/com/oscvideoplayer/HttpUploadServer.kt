@@ -65,7 +65,7 @@ class HttpUploadServer(
         val path = parts[1]
 
         val headers = mutableMapOf<String, String>()
-        var contentLength = 0
+        var contentLength = 0L
         while (true) {
             val line = readLine(input) ?: break
             if (line.isEmpty()) break
@@ -75,7 +75,7 @@ class HttpUploadServer(
                 val value = line.substring(idx + 2)
                 headers[key] = value
                 when (key) {
-                    "content-length" -> contentLength = value.toIntOrNull() ?: 0
+                    "content-length" -> contentLength = value.toLongOrNull() ?: 0L
                 }
             }
         }
@@ -410,9 +410,9 @@ btn.onclick=function(){
 
     // ────── Upload (streaming multipart, O(1) memory) ──────
 
-    private fun handleUpload(client: Socket, input: InputStream, headers: Map<String, String>, contentLength: Int) {
-        if (contentLength > Int.MAX_VALUE) {
-            input.skip(contentLength.toLong())
+    private fun handleUpload(client: Socket, input: InputStream, headers: Map<String, String>, contentLength: Long) {
+        if (contentLength > Int.MAX_VALUE.toLong()) {
+            input.skip(contentLength)
             return sendResponse(client, 413, "Too Large", "text/plain; charset=utf-8", "文件超过2GB限制".toByteArray())
         }
         val ct = headers["content-type"] ?: return sendResponse(client, 400, "Bad Request", "text/plain; charset=utf-8", "缺少 Content-Type".toByteArray())
@@ -439,14 +439,14 @@ btn.onclick=function(){
         }
     }
 
-    private class PartResult(val headers: String, val initialData: ByteArray, val remaining: Int)
+    private class PartResult(val headers: String, val initialData: ByteArray, val remaining: Long)
 
-    private fun readPartHeaders(input: InputStream, boundary: ByteArray, totalRemaining: Int): PartResult? {
+    private fun readPartHeaders(input: InputStream, boundary: ByteArray, totalRemaining: Long): PartResult? {
         var rem = totalRemaining
         val buf = ByteArray(4096)
         val acc = java.io.ByteArrayOutputStream()
         while (rem > 0) {
-            val n = input.read(buf, 0, minOf(buf.size, rem))
+                val n = input.read(buf, 0, minOf(buf.size.toLong(), rem).toInt())
             if (n < 0) break
             rem -= n
             acc.write(buf, 0, n)
@@ -467,50 +467,64 @@ btn.onclick=function(){
         return null
     }
 
-    private fun streamPartData(input: InputStream, dest: File, boundary: ByteArray, initial: ByteArray, remaining: Int): Long {
+    private fun streamPartData(input: InputStream, dest: File, boundary: ByteArray, initial: ByteArray, remaining: Long): Long {
         var total = 0L
-        // sliding window: keep last (boundary.size - 1) bytes from previous chunk for overlap detection
+        // sliding window: only keep the trailing portion needed to detect boundary across chunk edges
         val window = java.io.ByteArrayOutputStream()
         window.write(initial)
+        val maxOverlap = boundary.size - 1
 
         dest.outputStream().use { out ->
-            fun flushWindow() {
+            fun flushToBoundary(): Boolean {
                 val data = window.toByteArray()
                 val bIdx = indexOf(data, boundary, 0)
                 if (bIdx >= 0) {
                     val writeLen = if (bIdx >= 2) bIdx - 2 else 0
                     if (writeLen > 0) out.write(data, 0, writeLen)
                     total += writeLen
+                    // keep the rest after boundary for next cycle
                     window.reset()
-                    window.write(data, bIdx + boundary.size, data.size - bIdx - boundary.size)
+                    val after = data.size - (bIdx + boundary.size)
+                    if (after > 0) window.write(data, bIdx + boundary.size, after)
+                    return true
                 }
+                // no boundary found: write everything except the trailing overlap bytes
+                val writeLen = (data.size - maxOverlap).coerceAtLeast(0)
+                if (writeLen > 0) out.write(data, 0, writeLen)
+                total += writeLen
+                // keep the trailing overlap for next chunk
+                val keep = data.copyOfRange(writeLen, data.size)
+                window.reset()
+                if (keep.isNotEmpty()) window.write(keep)
+                return false
             }
 
-            flushWindow()
+            flushToBoundary()
 
             val buf = ByteArray(65536)
             var rem = remaining
             while (rem > 0) {
-                val n = input.read(buf, 0, minOf(buf.size, rem))
+            val n = input.read(buf, 0, minOf(buf.size.toLong(), rem).toInt())
                 if (n < 0) break
                 rem -= n
                 window.write(buf, 0, n)
-                flushWindow()
-            }
-
-            // after reading all data, the last chunk before closing boundary
-            val leftover = window.toByteArray()
-            val closeBoundary = "--".toByteArray()
-            val closeIdx = indexOf(leftover, closeBoundary, 0)
-            if (closeIdx >= 0) {
-                val writeLen = if (closeIdx >= 2) closeIdx - 2 else 0
-                if (writeLen > 0) out.write(leftover, 0, writeLen)
-                total += writeLen
-            } else if (leftover.isNotEmpty()) {
-                // no closing boundary? write everything minus trailing CRLF
-                val writeLen = (leftover.size - 2).coerceAtLeast(0)
-                if (writeLen > 0) out.write(leftover, 0, writeLen)
-                total += writeLen
+                if (flushToBoundary()) {
+                    // boundary found, write remaining data after it
+                    val leftover = window.toByteArray()
+                    val closeBoundary = "--".toByteArray()
+                    val closeIdx = indexOf(leftover, closeBoundary, 0)
+                    if (closeIdx >= 0) {
+                        val writeLen = if (closeIdx >= 2) closeIdx - 2 else 0
+                        if (writeLen > 0) out.write(leftover, 0, writeLen)
+                        total += writeLen
+                    } else if (leftover.isNotEmpty()) {
+                        val writeLen = (leftover.size - 2).coerceAtLeast(0)
+                        if (writeLen > 0) out.write(leftover, 0, writeLen)
+                        total += writeLen
+                    }
+                    window.reset()
+                    break
+                }
             }
         }
         return total
