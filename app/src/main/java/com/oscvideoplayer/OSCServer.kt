@@ -383,6 +383,7 @@ class OSCServer(
                     }
                     "get" -> {
                         val items = mainActivity?.getPlaylistItems() ?: emptyList()
+                        val lines = mutableListOf<String>()
                         for ((i, it) in items.withIndex()) {
                             val name = it["name"] ?: ""
                             val path = it["path"] as? String ?: ""
@@ -391,21 +392,16 @@ class OSCServer(
                                 try {
                                     val r = android.media.MediaMetadataRetriever()
                                     r.setDataSource(path)
-                                    val d = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                                    duration = d
-                                    val fpsRaw = r.extractMetadata(30)?.toDoubleOrNull() ?: 0.0
-                                    fps = fpsRaw
+                                    duration = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                                    fps = r.extractMetadata(30)?.toDoubleOrNull() ?: 0.0
                                     r.release()
                                 } catch (_: Exception) {}
                                 val kfs = mainActivity?.getVideoKeyframes(path)
                                 if (kfs != null) { secondKf = kfs.first; lastKf = kfs.second }
                             }
-                            sendResponse(OSCMessage("/Playlist", listOf(
-                                i.toString(), name, duration.toString(), fps.toString(),
-                                secondKf.toString(), lastKf.toString()
-                            )), client)
+                            lines.add("$i $name $duration $fps $secondKf $lastKf")
                         }
-                        return
+                        response = OSCMessage("/Playlist", listOf(lines.joinToString("\n")))
                     }
                     else -> response = OSCMessage("/Error", listOf("Unknown playlist command"))
                 }
