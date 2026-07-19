@@ -239,6 +239,12 @@ class OSCServer(
                 }
             }
 
+            "discover" -> {
+                val ip = mainActivity?.getLocalIPAddress() ?: "unknown"
+                val mac = mainActivity?.getMacAddress() ?: "unknown"
+                response = OSCMessage("/Discover", listOf("ip=$ip", "mac=$mac"))
+            }
+
             "stop" -> {
                 mainActivity?.stopVideo()
                 response = OSCMessage("/Stopped", listOf(""))

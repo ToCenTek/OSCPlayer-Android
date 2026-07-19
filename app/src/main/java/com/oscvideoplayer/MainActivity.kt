@@ -287,7 +287,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getLocalIPAddress(): String? {
+    fun getLocalIPAddress(): String? {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
@@ -304,6 +304,26 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "getLocalIPAddress: ${e.message}")
         }
         return null
+    }
+
+    fun getMacAddress(): String {
+        try {
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val intf = interfaces.nextElement()
+                val addrs = intf.inetAddresses
+                var hasV4 = false
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (!a.isLoopbackAddress && a is java.net.Inet4Address) { hasV4 = true; break }
+                }
+                if (hasV4) {
+                    val mac = intf.hardwareAddress ?: continue
+                    return mac.joinToString(":") { "%02x".format(it) }
+                }
+            }
+        } catch (_: Exception) {}
+        return "unknown"
     }
 
     private fun unregisterNsdService() {
