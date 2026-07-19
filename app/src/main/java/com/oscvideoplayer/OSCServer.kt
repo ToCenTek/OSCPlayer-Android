@@ -271,9 +271,9 @@ class OSCServer(
                 if (volume == null && msg.args.isNotEmpty()) {
                     volume = (msg.args[0] as? Number)?.toFloat()
                 }
-                volume = (volume ?: 0.5f).coerceIn(0f, 1f)
+                volume = (volume ?: 50f).coerceIn(0f, 100f)
                 mainActivity?.setVolume(volume)
-                response = OSCMessage("/Volume", listOf("${(volume * 100).toInt()}%"))
+                response = OSCMessage("/Volume", listOf("${volume.toInt()}%"))
             }
 
             "seek" -> {

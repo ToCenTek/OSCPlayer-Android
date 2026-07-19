@@ -587,8 +587,7 @@ class MainActivity : AppCompatActivity() {
                     cachedVolume = p.volume
                     try {
                         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-                        cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() /
-                            am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
                     } catch (_: Exception) {}
                 }
                 if (debugOverlayEnabled) {
@@ -735,8 +734,7 @@ class MainActivity : AppCompatActivity() {
 
     fun setVolume(volume: Float) {
         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-        val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
-        val targetVol = (volume.coerceIn(0f, 1f) * maxVol).toInt()
+        val targetVol = volume.toInt().coerceIn(0, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
         am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
     }
 
@@ -744,10 +742,10 @@ class MainActivity : AppCompatActivity() {
         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
         val currentVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
         if (currentVol > 0) {
-            cachedVolume = currentVol.toFloat() / am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+            cachedVolume = currentVol.toFloat()
             am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
         } else {
-            val targetVol = (cachedVolume * am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt().coerceAtLeast(1)
+            val targetVol = cachedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
             am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
         }
     }
