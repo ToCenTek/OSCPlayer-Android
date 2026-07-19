@@ -12,8 +12,8 @@ class Watchdog(private val playerProvider: () -> Player?) {
 
     companion object {
         private const val TAG = "Watchdog"
-        private const val CHECK_INTERVAL_MS = 15_000L
-        private const val MAX_STALL_TIME_MS = 30_000L
+        private const val CHECK_INTERVAL_MS = 30_000L
+        private const val MAX_STALL_TIME_MS = 60_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())

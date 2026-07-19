@@ -736,11 +736,9 @@ class OSCServer(
                 }
             }
 
-            "screenshot" -> {
-                mainActivity?.takeScreenshot { path ->
-                    sendResponse(OSCMessage("/Screenshot", listOf(path ?: "failed")), client)
-                }
-                return
+            "overlay" -> {
+                mainActivity?.toggleDebugOverlay()
+                response = OSCMessage("/Overlay", listOf(mainActivity?.isDebugOverlayOn() == true))
             }
 
             "upload" -> {
@@ -770,7 +768,6 @@ class OSCServer(
                     appendLine("Display:")
                     appendLine("  /tct/text/size/pos  Show text overlay")
                     appendLine("  /fullscreen         Fullscreen")
-                    appendLine("  /screenshot         Take screenshot")
                     appendLine("  /upload             Show web upload URL")
                     appendLine("Info:")
                     appendLine("  /info[/name]        Video info (optional name)")

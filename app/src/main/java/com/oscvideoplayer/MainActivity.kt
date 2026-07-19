@@ -39,7 +39,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Calendar
@@ -68,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private var cachedPosition = 0L
     @Volatile
     private var cachedVolume = 1.0f
+    private var debugOverlayEnabled = false
 
     private lateinit var prefs: SharedPreferences
     private var nsdManager: NsdManager? = null
@@ -510,8 +510,7 @@ class MainActivity : AppCompatActivity() {
                 getVideoInfoProvider = { path -> getFileInfo(path) },
                 togglePlayPauseProvider = { runOnUiThread { togglePlayPause() } },
                 isPlayingProvider = { cachedIsPlaying },
-                currentVideoPathProvider = { activeVideoPath },
-                screenshotProvider = { takeScreenshot() }
+                currentVideoPathProvider = { activeVideoPath }
             )
             httpUploadServer?.start()
             Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")
@@ -572,7 +571,23 @@ class MainActivity : AppCompatActivity() {
                     cachedIsPlaying = p.isPlaying
                     cachedVolume = p.volume
                 }
-                kotlinx.coroutines.delay(500)
+                if (debugOverlayEnabled) {
+                    val vs = p?.videoSize
+                    val fmt = p?.videoFormat
+                    val w = vs?.width ?: 0
+                    val h = vs?.height ?: 0
+                    val fps = fmt?.frameRate ?: 0f
+                    val state = when (p?.playbackState) {
+                        Player.STATE_IDLE -> "IDLE"
+                        Player.STATE_BUFFERING -> "BUFF"
+                        Player.STATE_READY -> if (cachedIsPlaying) "PLAY" else "PAUS"
+                        Player.STATE_ENDED -> "DONE"
+                        else -> "?"
+                    }
+                    val text = "$state\nRendering resolution: ${w}x${h}\nRendering frame rate: ${"%.2f".format(fps)}fps"
+                    findViewById<android.widget.TextView>(com.oscvideoplayer.R.id.debugOverlay)?.text = text
+                }
+                kotlinx.coroutines.delay(1000)
             }
         }
     }
@@ -723,6 +738,16 @@ class MainActivity : AppCompatActivity() {
             player?.repeatMode = if (enabled) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
         }
     }
+
+    fun toggleDebugOverlay() {
+        debugOverlayEnabled = !debugOverlayEnabled
+        runOnUiThread {
+            findViewById<android.widget.TextView>(com.oscvideoplayer.R.id.debugOverlay)?.visibility =
+                if (debugOverlayEnabled) android.view.View.VISIBLE else android.view.View.GONE
+        }
+    }
+
+    fun isDebugOverlayOn() = debugOverlayEnabled
 
     fun setPlaybackSpeed(speed: Float) {
         playbackSpeed = speed.coerceIn(0.25f, 4.0f)
@@ -1172,250 +1197,6 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "Power schedule cleared")
     }
 
-    private fun isAllBlack(bmp: android.graphics.Bitmap): Boolean {
-        // sample 20 pixels spread across the frame
-        // check if they are literally black (all zeroes or full black)
-        val stepX = maxOf(1, bmp.width / 5)
-        val stepY = maxOf(1, bmp.height / 4)
-        var blackCount = 0
-        var total = 0
-        for (y in 0 until bmp.height step stepY) {
-            for (x in 0 until bmp.width step stepX) {
-                val p = bmp.getPixel(x, y)
-                total++
-                val a = android.graphics.Color.alpha(p)
-                val r = android.graphics.Color.red(p)
-                val g = android.graphics.Color.green(p)
-                val b = android.graphics.Color.blue(p)
-                if (a == 0 || (r == 0 && g == 0 && b == 0)) blackCount++
-            }
-        }
-        return total > 0 && blackCount == total
-    }
-    private fun decodeFrameDirect(path: String): android.graphics.Bitmap? {
-        var extractor: android.media.MediaExtractor? = null
-        var codec: android.media.MediaCodec? = null
-        var reader: android.media.ImageReader? = null
-        try {
-            extractor = android.media.MediaExtractor()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                extractor.setDataSource(path)
-            } else {
-                extractor.setDataSource(path)
-            }
-            val trackIndex = (0 until extractor.trackCount).firstOrNull { i ->
-                val f = extractor.getTrackFormat(i)
-                f.getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
-            } ?: return null
-            extractor.selectTrack(trackIndex)
-            val format = extractor.getTrackFormat(trackIndex)
-            val w = format.getInteger(android.media.MediaFormat.KEY_WIDTH)
-            val h = format.getInteger(android.media.MediaFormat.KEY_HEIGHT)
-            if (w <= 0 || h <= 0) return null
-
-            reader = android.media.ImageReader.newInstance(w, h, android.graphics.ImageFormat.YUV_420_888, 2)
-            val mime = format.getString(android.media.MediaFormat.KEY_MIME) ?: "video/avc"
-            codec = android.media.MediaCodec.createDecoderByType(mime)
-            codec.configure(format, reader.surface, null, 0)
-            codec.start()
-
-            val timeout = 10000L
-            var frameDecoded = false
-            var bitmap: android.graphics.Bitmap? = null
-            var attempts = 0
-
-            while (!frameDecoded && attempts < 30) {
-                attempts++
-                // feed input
-                val inIdx = codec.dequeueInputBuffer(timeout)
-                if (inIdx >= 0) {
-                    val buf = codec.getInputBuffer(inIdx)!!
-                    val sampleSize = extractor.readSampleData(buf, 0)
-                    if (sampleSize < 0) {
-                        codec.queueInputBuffer(inIdx, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                    } else {
-                        codec.queueInputBuffer(inIdx, 0, sampleSize, extractor.sampleTime, 0)
-                        extractor.advance()
-                    }
-                }
-                // drain output
-                val info = android.media.MediaCodec.BufferInfo()
-                var outIdx = codec.dequeueOutputBuffer(info, timeout)
-                if (outIdx == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    outIdx = codec.dequeueOutputBuffer(info, timeout)
-                }
-                if (outIdx >= 0) {
-                    codec.releaseOutputBuffer(outIdx, true) // render to surface
-                    frameDecoded = true
-                }
-                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
-            }
-
-            if (frameDecoded) {
-                Thread.sleep(100) // wait for ImageReader
-                val image = reader.acquireLatestImage()
-                if (image != null) {
-                    bitmap = yuv420888ToBitmap(image, w, h)
-                    image.close()
-                }
-            }
-            return bitmap
-        } catch (e: Exception) {
-            Log.e(TAG, "decodeFrameDirect error: ${e.message}")
-            return null
-        } finally {
-            codec?.stop(); codec?.release()
-            extractor?.release()
-            reader?.close()
-        }
-    }
-
-    private fun yuv420888ToBitmap(image: android.media.Image, w: Int, h: Int): android.graphics.Bitmap {
-        val planes = image.planes
-        val yPlane = planes[0]
-        val uPlane = planes[1]
-        val vPlane = planes[2]
-        val yBuf = java.nio.ByteBuffer.allocate(w * h)
-        val uvBuf = java.nio.ByteBuffer.allocate(w * h / 2)
-
-        // copy Y plane
-        val yRowStride = yPlane.rowStride
-        val yPixStride = yPlane.pixelStride
-        val ySrc = yPlane.buffer
-        ySrc.position(0)
-        if (yPixStride == 1) {
-            for (row in 0 until h) {
-                ySrc.position(row * yRowStride)
-                ySrc.get(yBuf.array(), row * w, w)
-            }
-        } else {
-            for (row in 0 until h) {
-                var srcPos = row * yRowStride
-                for (col in 0 until w) {
-                    yBuf.put(ySrc.get(srcPos))
-                    srcPos += yPixStride
-                }
-            }
-        }
-
-        // copy UV planes (NV21 format: V...U... interleaved)
-        val uRowStride = uPlane.rowStride
-        val vRowStride = vPlane.rowStride
-        val uPixStride = uPlane.pixelStride
-        val vPixStride = vPlane.pixelStride
-        val uSrc = uPlane.buffer
-        val vSrc = vPlane.buffer
-        uSrc.position(0); vSrc.position(0)
-        val uvSize = w * h / 4
-        for (row in 0 until h / 2) {
-            val uPos = row * uRowStride
-            val vPos = row * vRowStride
-            for (col in 0 until w / 2) {
-                uvBuf.put(vSrc.get(vPos + col * vPixStride)) // V first for NV21
-                uvBuf.put(uSrc.get(uPos + col * uPixStride)) // U second
-            }
-        }
-
-        val yuv = ByteArray(w * h * 3 / 2)
-        yBuf.position(0); yBuf.get(yuv, 0, w * h)
-        uvBuf.position(0); uvBuf.get(yuv, w * h, w * h / 2)
-
-        val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.RGB_565)
-        val yuvImage = android.graphics.YuvImage(yuv, android.graphics.ImageFormat.NV21, w, h, null)
-        val os = java.io.ByteArrayOutputStream()
-        yuvImage.compressToJpeg(android.graphics.Rect(0, 0, w, h), 90, os)
-        val jpeg = os.toByteArray()
-        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, java.io.ByteArrayOutputStream())
-        return android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-    }
-
-    fun takeScreenshot(onDone: ((String?) -> Unit)? = null) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            var ok = false
-            // 1. TextureView.getBitmap() (works with texture_view surface type)
-            if (!ok) {
-                try {
-                    withContext(Dispatchers.Main) {
-                        val pv = playerView ?: return@withContext
-                        val tv = pv.videoSurfaceView as? android.view.TextureView
-                        if (tv != null) {
-                            val bmp = tv.bitmap
-                            if (bmp != null) {
-                                val path = saveScreenshotBitmap(bmp)
-                                bmp.recycle()
-                                if (path != null) { ok = true; onDone?.invoke(path) }
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "TextureView bitmap error: ${e.message}")
-                }
-            }
-            // 2. PixelCopy from Window (API 26+, works with texture_view)
-            if (!ok && Build.VERSION.SDK_INT >= 26) {
-                val pv = playerView ?: return@launch
-                try {
-                    val bmp = withContext(Dispatchers.Main) {
-                        val w = pv.width; val h = pv.height
-                        if (w <= 0 || h <= 0) null
-                        else android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-                    } ?: return@launch
-                    val success = suspendCancellableCoroutine<Boolean> { cont ->
-                        android.view.PixelCopy.request(window, bmp,
-                            { result ->
-                                if (result == android.view.PixelCopy.SUCCESS) {
-                                    val path = saveScreenshotBitmap(bmp)
-                                    bmp.recycle()
-                                    if (path != null) { ok = true; onDone?.invoke(path) }
-                                }
-                                cont.resume(result == android.view.PixelCopy.SUCCESS, null)
-                            },
-                            android.os.Handler(android.os.Looper.getMainLooper()))
-                        cont.invokeOnCancellation { bmp.recycle() }
-                    }
-                    if (!success) bmp.recycle()
-                } catch (e: Exception) {
-                    Log.e(TAG, "PixelCopy error: ${e.message}")
-                }
-            }
-            // 3. decorView fallback
-            if (!ok) {
-                try {
-                    withContext(Dispatchers.Main) {
-                        val v = window.decorView
-                        if (v.width > 0 && v.height > 0) {
-                            val bmp = android.graphics.Bitmap.createBitmap(
-                                v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
-                            v.draw(android.graphics.Canvas(bmp))
-                            val path = saveScreenshotBitmap(bmp)
-                            bmp.recycle()
-                            onDone?.invoke(path)
-                        } else { onDone?.invoke(null) }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "DecorView screenshot failed: ${e.message}")
-                    onDone?.invoke(null)
-                }
-            }
-        }
-    }
-
-    private fun saveScreenshotBitmap(bitmap: android.graphics.Bitmap): String? {
-        return try {
-            val dir = File(getDefaultDirectory(), ".screenshots")
-            dir.mkdirs()
-            val file = File(dir, "screenshot_${System.currentTimeMillis()}.png")
-            java.io.FileOutputStream(file).use { out ->
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-            }
-            Log.d(TAG, "Screenshot saved: ${file.absolutePath}")
-            file.absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "Screenshot save failed: ${e.message}")
-            null
-        }
-    }
-
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
         if (event != null && event.action == KeyEvent.ACTION_DOWN) {
             val kc = event.keyCode
@@ -1550,6 +1331,7 @@ class MainActivity : AppCompatActivity() {
             window?.setLayout(w, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
             window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x4C1A1A1A.toInt()))
             window?.setGravity(android.view.Gravity.CENTER)
+            window?.setDimAmount(0f)
             setCanceledOnTouchOutside(false)
             setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN) {
@@ -1581,7 +1363,6 @@ class MainActivity : AppCompatActivity() {
             "播放列表",
             "播放模式",
             "循环开关",
-            "截图",
             "显示上传地址",
             "设为开机视频",
             "删除当前视频",
@@ -1598,22 +1379,16 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "循环: ${if (isLoopEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
                 }
                 5 -> {
-                    Toast.makeText(this, "截图处理中...", Toast.LENGTH_SHORT).show()
-                    takeScreenshot { path ->
-                        runOnUiThread { Toast.makeText(this, "截图${if (path != null) "成功" else "失败"}", Toast.LENGTH_SHORT).show() }
-                    }
-                }
-                6 -> {
                     val url = getHttpServerUrl()
                     android.app.AlertDialog.Builder(this)
                         .setTitle("上传地址")
                         .setMessage("在浏览器中打开:\n$url")
                         .setPositiveButton("确定", null).show()
                 }
-                7 -> showSetStartupVideo()
-                8 -> deleteCurrentVideo()
-                9 -> showSettingsMenu()
-                10 -> openAboutActivity()
+                6 -> showSetStartupVideo()
+                7 -> deleteCurrentVideo()
+                8 -> showSettingsMenu()
+                9 -> openAboutActivity()
             }
         }
     }
@@ -1709,6 +1484,7 @@ class MainActivity : AppCompatActivity() {
             "设为默认桌面",
             "返回系统桌面",
             "恢复默认设置",
+            "调试信息",
             "退出应用"
         )) { which ->
             when (which) {
@@ -1731,7 +1507,11 @@ class MainActivity : AppCompatActivity() {
                 6 -> showSetDefaultLauncherDialog()
                 7 -> returnToSystemLauncher()
                 8 -> showResetSettingsDialog()
-                9 -> finish()
+                9 -> {
+                    toggleDebugOverlay()
+                    Toast.makeText(this, "调试信息: ${if (debugOverlayEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
+                }
+                10 -> finish()
             }
         }
     }

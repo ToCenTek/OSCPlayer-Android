@@ -18,8 +18,7 @@ class HttpUploadServer(
     private val getVideoInfoProvider: ((String) -> Map<String, Any>)? = null,
     private val togglePlayPauseProvider: (() -> Unit)? = null,
     private val isPlayingProvider: (() -> Boolean)? = null,
-    private val currentVideoPathProvider: (() -> String?)? = null,
-    private val screenshotProvider: (() -> Unit)? = null
+    private val currentVideoPathProvider: (() -> String?)? = null
 ) {
     private val tag = "HttpUploadServer"
     private var serverSocket: ServerSocket? = null
@@ -85,12 +84,6 @@ class HttpUploadServer(
             when {
                 method == "GET" && path == "/" -> serveHtml(client)
                 method == "GET" && path.startsWith("/files") -> serveFiles(client, path)
-                method == "GET" && path.startsWith("/screenshots") -> serveScreenshots(client, path)
-                method == "GET" && path == "/screenshot" -> {
-                    screenshotProvider?.invoke()
-                    val redirect = "HTTP/1.1 302 Found\r\nLocation: /screenshots\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    client.outputStream.write(redirect.toByteArray())
-                }
                 method == "POST" && path == "/upload" -> handleUpload(client, input, headers, contentLength)
                 else -> sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
             }
@@ -379,7 +372,6 @@ input[type=file]{display:none}
 </div>
 <div class=footer>
 <a href="/files">文件管理</a> &middot;
-<a href="/screenshots">截图</a> &middot;
 OSCPlayer 视频播放管理系统
 </div>
 </div>
@@ -414,147 +406,6 @@ btn.onclick=function(){
 </script>
 </body></html>"""
         sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache, no-store, must-revalidate")
-    }
-
-    // ────── Screenshots ──────
-
-    private fun serveScreenshots(client: Socket, path: String) {
-        val screenshotsDir = File(uploadDir, ".screenshots")
-
-        val deletePrefix = "/screenshots/delete/"
-        if (path.startsWith(deletePrefix)) {
-            val name = path.removePrefix(deletePrefix)
-            val file = File(screenshotsDir, name)
-            if (file.exists()) file.delete()
-            val redirect = "HTTP/1.1 302 Found\r\nLocation: /screenshots\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            try { client.getOutputStream().write(redirect.toByteArray()); client.getOutputStream().flush() } catch (_: Exception) {}
-            return
-        }
-
-        val filename = path.removePrefix("/screenshots/")
-        if (filename.isNotEmpty() && filename.contains(".") && !filename.contains("/")) {
-            val file = File(screenshotsDir, filename)
-            if (file.exists() && file.isFile) {
-                return sendResponse(client, 200, "OK", "image/png", file.readBytes(),
-                    "Cache-Control: max-age=3600")
-            }
-            return sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
-        }
-
-        if (!screenshotsDir.exists()) {
-            return sendResponse(client, 200, "OK", "text/html; charset=utf-8", """
-                <!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
-                <title>截图 - OSCPlayer</title><meta name=viewport content="width=device-width,initial-scale=1">
-                <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px;text-align:center}
-                .empty{margin-top:80px;font-size:18px;color:#666}</style></head>
-                <body><div class=empty>暂无截图</div></body></html>""")
-        }
-
-        val files = screenshotsDir.listFiles()?.filter { it.name.endsWith(".png") }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-
-        val items = files.joinToString("\n") { f ->
-            val name = f.name
-            val size = when {
-                f.length() >= 1024L * 1024 -> String.format("%.1f MB", f.length() / (1024.0 * 1024.0))
-                f.length() >= 1024 -> "${f.length() / 1024} KB"
-                else -> "${f.length()} B"
-            }
-            """<div class=item>
-<img src="/screenshots/$name" loading=lazy onclick="openViewer('$name')">
-<div class=info>
-<span class=name>$name</span>
-<span class=size>$size</span>
-<span class=actions>
-<a href="javascript:" class="btn info" onclick="showInfo(this)" title="信息"><i style="font-style:italic;font-weight:bold">i</i></a>
-<a href="/screenshots/$name" download class=btn title="下载">&#x2913;</a>
-<a href="/screenshots/delete/$name" class="btn del" title="删除" onclick="return confirm('确定删除 $name ?')">&#x2715;</a>
-</span>
-</div></div>"""
-        }
-
-        val html = """<!DOCTYPE html>
-<html lang=zh>
-<head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>截图 - OSCPlayer</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px}
-h1{font-size:22px;color:#fc0;margin-bottom:20px;text-align:center}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
-.item{background:rgba(255,255,255,.05);border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
-.item img{width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:#000;display:block;cursor:pointer;transition:opacity .2s}
-.item img:hover{opacity:.85}
-.item .info{padding:8px 12px;display:flex;align-items:center;font-size:12px;gap:8px}
-.item .name{color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
-.item .size{color:#555;white-space:nowrap}
-.item .actions{display:flex;gap:2px}
-.item .btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;text-decoration:none;font-size:15px;color:#888;transition:background .2s,color .2s}
-.item .btn:hover{background:rgba(255,255,255,.1);color:#fc0}
-.item .btn.info:hover{color:#5bf}
-.item .btn.del:hover{color:#f44}
-.back{display:block;text-align:center;margin-top:24px;color:#fc0;text-decoration:none;font-size:14px;opacity:.6;padding:8px}
-.back:hover{opacity:1}
-#viewer{display:none;position:fixed;z-index:999;inset:0;background:rgba(0,0,0,.95);justify-content:center;align-items:center}
-#viewer.open{display:flex}
-#viewer img{max-width:95vw;max-height:95vh;object-fit:contain;border-radius:4px;box-shadow:0 0 60px rgba(0,0,0,.8)}
-#viewer .close{position:absolute;top:16px;right:20px;font-size:36px;color:#888;cursor:pointer;width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(255,255,255,.08);border:none;transition:background .2s,color .2s;z-index:10}
-#viewer .close:hover{background:rgba(255,255,255,.15);color:#fff}
-#viewer .vdl{position:absolute;top:16px;right:80px;font-size:14px;color:#fc0;text-decoration:none;padding:12px 20px;border-radius:8px;background:rgba(255,255,255,.08);transition:background .2s}
-#viewer .vdl:hover{background:rgba(255,255,255,.15)}
-</style>
-</head>
-<body>
-<h1>&#x1F4F7; 截图</h1>
-<div class=grid id=grid>$items</div>
-<a class=back href="/">&larr; 返回上传</a>
-<div id=infov style="display:none;position:fixed;z-index:1000;inset:0;background:rgba(0,0,0,.7);justify-content:center;align-items:center" onclick="if(event.target==this)closeInfo()">
-<div style="background:#1a1a1a;border-radius:12px;padding:24px 32px;max-width:380px;width:90%;border:1px solid rgba(255,255,255,.1);font-size:14px;line-height:1.8">
-<div style="color:#fc0;font-size:16px;font-weight:bold;margin-bottom:8px">文件信息</div>
-<div id=infoName style="color:#aaa;word-break:break-all;margin-bottom:4px"></div>
-<div id=infoSize style="color:#888"></div>
-<div id=infoDims style="color:#888"></div>
-<div style="text-align:center;margin-top:14px"><button onclick="closeInfo()" style="background:rgba(255,255,255,.08);border:none;color:#ccc;padding:6px 24px;border-radius:6px;cursor:pointer;font-size:13px">关闭</button></div>
-</div>
-</div>
-<div id=viewer onclick="if(event.target==this)closeViewer()">
-<button class=close onclick="closeViewer()">&times;</button>
-<a class=vdl id=vdl href="#" download>下载</a>
-<img id=vimg src="" alt="">
-</div>
-<script>
-function openViewer(name){
- document.getElementById('vimg').src='/screenshots/'+name;
- document.getElementById('vdl').href='/screenshots/'+name;
- document.getElementById('viewer').classList.add('open');
- document.body.style.overflow='hidden';
-}
-function closeViewer(){
- document.getElementById('viewer').classList.remove('open');
- document.getElementById('vimg').src='';
- document.body.style.overflow='';
-}
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeViewer()});
-function showInfo(btn){
- var item=btn.closest('.item');
- var img=item.querySelector('img');
- var name=item.querySelector('.name').textContent;
- var size=item.querySelector('.size').textContent;
- var loadIt=function(w,h){
-  document.getElementById('infoName').textContent=name;
-  document.getElementById('infoSize').textContent='大小: '+size;
-  document.getElementById('infoDims').textContent='分辨率: '+w+' x '+h;
-  document.getElementById('infov').style.display='flex';
- };
- if(img.naturalWidth&&img.naturalHeight){loadIt(img.naturalWidth,img.naturalHeight);return}
- var tmp=new Image();
- tmp.onload=function(){loadIt(tmp.naturalWidth,tmp.naturalHeight)};
- tmp.src=img.src;
-}
-function closeInfo(){document.getElementById('infov').style.display='none'}
-</script>
-</body></html>"""
-        sendResponse(client, 200, "OK", "text/html; charset=utf-8", html.toByteArray(), "Cache-Control: no-cache")
     }
 
     // ────── Upload (streaming multipart, O(1) memory) ──────

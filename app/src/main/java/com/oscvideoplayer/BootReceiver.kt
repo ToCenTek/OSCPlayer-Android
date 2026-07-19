@@ -59,7 +59,7 @@ class AlarmReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AlarmReceiver"
         private const val REQUEST_CODE = 1001
-        private const val INTERVAL_MS = 15_000L
+        private const val INTERVAL_MS = 60_000L
         
         fun schedule(context: Context) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager

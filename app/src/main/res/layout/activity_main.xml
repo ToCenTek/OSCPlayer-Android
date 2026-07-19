@@ -10,7 +10,7 @@
         android:layout_height="match_parent"
         app:use_controller="false"
         app:show_buffering="when_playing"
-        app:surface_type="texture_view"
+        app:surface_type="surface_view"
         app:resize_mode="fill"
         xmlns:app="http://schemas.android.com/apk/res-auto" />
 
@@ -26,5 +26,21 @@
         android:shadowDx="2"
         android:shadowDy="2"
         android:shadowRadius="4" />
+
+    <TextView
+        android:id="@+id/debugOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:padding="8dp"
+        android:background="#AA000000"
+        android:textColor="#FFE0E0E0"
+        android:textSize="14sp"
+        android:typeface="monospace"
+        android:visibility="gone"
+        android:shadowColor="@color/black"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="2"
+        android:layout_margin="8dp" />
 
 </FrameLayout>
