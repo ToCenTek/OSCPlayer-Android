@@ -287,37 +287,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun getVideoKeyframes(path: String): Pair<Long, Long>? {
+    fun getVideoKeyframes(path: String): Triple<Long, Long, Double>? {
         return try {
             val extractor = android.media.MediaExtractor()
             extractor.setDataSource(path)
             val videoTrack = (0 until extractor.trackCount).firstOrNull { i ->
                 extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
             } ?: run { extractor.release(); return null }
+            val format = extractor.getTrackFormat(videoTrack)
             extractor.selectTrack(videoTrack)
-            val durationUs = extractor.getTrackFormat(videoTrack).getLong(android.media.MediaFormat.KEY_DURATION)
+            val durationUs = format.getLong(android.media.MediaFormat.KEY_DURATION)
+            val fps = if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
+                format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() else 0.0
             var kfCount = 0
             var secondKf = 0L
             var lastKf = 0L
-            // scan from start to find 2nd keyframe
-            while (extractor.advance()) {
+            // scan from start to find 2nd keyframe, track last keyframe
+            var advanceMore = true
+            while (advanceMore && extractor.advance()) {
                 if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                     kfCount++
-                    if (kfCount == 2) { secondKf = extractor.sampleTime / 1000; break }
+                    lastKf = extractor.sampleTime / 1000
+                    if (kfCount == 2) secondKf = lastKf
+                    if (kfCount >= 2 && lastKf > 0) advanceMore = false
                 }
             }
-            // seek near end to find last keyframe
-            extractor.seekTo((durationUs - 100_000).coerceAtLeast(0), android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            lastKf = extractor.sampleTime / 1000
-            // advance to the actual last keyframe (there might be one more after seek)
-            while (extractor.advance()) {
-                if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                    lastKf = extractor.sampleTime / 1000
+            // seek near end to find actual last keyframe
+            if (advanceMore) {
+                // didn't find 2nd KF within scanned range, continue scanning
+                while (extractor.advance()) {
+                    if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                        lastKf = extractor.sampleTime / 1000
+                        if (secondKf == 0L && kfCount >= 2) secondKf = lastKf
+                    }
+                }
+            } else {
+                // seek near end to find last keyframe
+                val seekUs = (durationUs - 100_000).coerceAtLeast(0L)
+                extractor.seekTo(seekUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val st = extractor.sampleTime
+                if (st >= 0) lastKf = st / 1000
+                while (extractor.advance()) {
+                    if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                        lastKf = extractor.sampleTime / 1000
+                    }
                 }
             }
             extractor.release()
             if (secondKf <= 0) return null
-            Pair(secondKf, lastKf)
+            Triple(secondKf, lastKf, fps)
         } catch (_: Exception) { null }
     }
 

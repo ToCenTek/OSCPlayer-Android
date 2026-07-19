@@ -252,7 +252,7 @@ class OSCServer(
                 if (videoPath != null) {
                     val kfs = mainActivity?.getVideoKeyframes(videoPath)
                     if (kfs != null) {
-                        response = OSCMessage("/GOP", listOf(kfs.first.toString(), kfs.second.toString()))
+                        response = OSCMessage("/GOP", listOf(kfs.first.toString(), kfs.second.toString(), kfs.third.toString()))
                     } else {
                         response = OSCMessage("/Error", listOf("Cannot read GOP: $name"))
                     }
@@ -393,11 +393,10 @@ class OSCServer(
                                     val r = android.media.MediaMetadataRetriever()
                                     r.setDataSource(path)
                                     duration = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                                    fps = r.extractMetadata(30)?.toDoubleOrNull() ?: 0.0
                                     r.release()
                                 } catch (_: Exception) {}
                                 val kfs = mainActivity?.getVideoKeyframes(path)
-                                if (kfs != null) { secondKf = kfs.first; lastKf = kfs.second }
+                                if (kfs != null) { secondKf = kfs.first; lastKf = kfs.second; fps = kfs.third }
                             }
                             lines.add("$i $name $duration $fps $secondKf $lastKf")
                         }
