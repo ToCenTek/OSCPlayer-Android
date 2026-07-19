@@ -585,6 +585,11 @@ class MainActivity : AppCompatActivity() {
                     cachedPosition = p.currentPosition
                     cachedIsPlaying = p.isPlaying
                     cachedVolume = p.volume
+                    try {
+                        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                        cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() /
+                            am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                    } catch (_: Exception) {}
                 }
                 if (debugOverlayEnabled) {
                     val vs = p?.videoSize
@@ -729,21 +734,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun setVolume(volume: Float) {
-        runOnUiThread { player?.volume = volume.coerceIn(0f, 1f) }
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        val targetVol = (volume.coerceIn(0f, 1f) * maxVol).toInt()
+        am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
     }
 
     fun toggleMute() {
-        runOnUiThread {
-            val p = player ?: return@runOnUiThread
-            if (p.volume > 0f) {
-                cachedVolume = p.volume
-                p.volume = 0f
-                Toast.makeText(this, "静音", Toast.LENGTH_SHORT).show()
-            } else {
-                p.volume = cachedVolume.coerceIn(0f, 1f)
-                Toast.makeText(this, "音量: ${(p.volume * 100).toInt()}%", Toast.LENGTH_SHORT).show()
-            }
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        val currentVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+        if (currentVol > 0) {
+            cachedVolume = currentVol.toFloat() / am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+        } else {
+            val targetVol = (cachedVolume * am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)).toInt().coerceAtLeast(1)
+            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
         }
+    }
+
+    fun isMuted(): Boolean {
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        return am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) == 0
     }
 
     fun setLoop(enabled: Boolean) {
