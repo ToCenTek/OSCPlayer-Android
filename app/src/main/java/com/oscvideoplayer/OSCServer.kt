@@ -266,6 +266,17 @@ class OSCServer(
                 response = OSCMessage("/Paused", listOf(mainActivity?.isPaused() == true))
             }
 
+            "mute" -> {
+                val value = if (parts.size > 1) parts[1].toIntOrNull()
+                           else (msg.args.getOrNull(0) as? Number)?.toInt() ?: -1
+                when (value) {
+                    0 -> mainActivity?.unmute()
+                    1 -> mainActivity?.mute()
+                    else -> mainActivity?.toggleMute()
+                }
+                response = OSCMessage("/Mute", listOf(mainActivity?.isMuted() == true))
+            }
+
             "volume" -> {
                 var volume = if (parts.size > 1) parts[1].toFloatOrNull() else null
                 if (volume == null && msg.args.isNotEmpty()) {

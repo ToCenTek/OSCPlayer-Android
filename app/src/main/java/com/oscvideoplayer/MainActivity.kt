@@ -755,6 +755,20 @@ class MainActivity : AppCompatActivity() {
         return am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) == 0
     }
 
+    fun mute() {
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
+        am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+    }
+
+    fun unmute() {
+        val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        if (am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) == 0) {
+            val targetVol = cachedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
+            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
+        }
+    }
+
     fun setLoop(enabled: Boolean) {
         isLoopEnabled = enabled
         prefs.edit().putBoolean(KEY_LOOP_ENABLED, enabled).apply()
