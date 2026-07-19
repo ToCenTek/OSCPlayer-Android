@@ -713,18 +713,20 @@ class OSCServer(
                 val sub = parts.getOrNull(1) ?: ""
                 when (sub) {
                     "start" -> {
-                        val time = parts.getOrNull(2) ?: ""
+                        val time = (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() }
+                            ?: parts.getOrNull(2) ?: ""
                         if (time.isNotEmpty()) {
                             mainActivity?.scheduleStart(time)
                             response = OSCMessage("/Schedule", listOf("start=$time"))
-                        } else response = OSCMessage("/Error", listOf("Usage: /schedule/start/HH:mm"))
+                        } else response = OSCMessage("/Schedule", listOf(mainActivity?.getScheduleStatus() ?: "no schedule"))
                     }
                     "stop" -> {
-                        val time = parts.getOrNull(2) ?: ""
+                        val time = (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() }
+                            ?: parts.getOrNull(2) ?: ""
                         if (time.isNotEmpty()) {
                             mainActivity?.scheduleStop(time)
                             response = OSCMessage("/Schedule", listOf("stop=$time"))
-                        } else response = OSCMessage("/Error", listOf("Usage: /schedule/stop/HH:mm"))
+                        } else response = OSCMessage("/Schedule", listOf(mainActivity?.getScheduleStatus() ?: "no schedule"))
                     }
                     "clear" -> {
                         mainActivity?.scheduleClear()
