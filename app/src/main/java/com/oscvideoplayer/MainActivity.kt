@@ -1138,12 +1138,15 @@ class MainActivity : AppCompatActivity() {
         scheduleStartTime = time
         prefs.edit().putString(KEY_SCHEDULE_START, time).apply()
         Log.d(TAG, "Schedule start set to $time")
+        // if time matches current minute, execute immediately
+        kotlinx.coroutines.MainScope().launch { checkSchedule() }
     }
 
     fun scheduleStop(time: String) {
         scheduleStopTime = time
         prefs.edit().putString(KEY_SCHEDULE_STOP, time).apply()
         Log.d(TAG, "Schedule stop set to $time")
+        kotlinx.coroutines.MainScope().launch { checkSchedule() }
     }
 
     fun scheduleClear() {
