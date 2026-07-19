@@ -760,7 +760,8 @@ class OSCServer(
                     "reboot" -> { sendReboot(); return }
                     "schedule" -> {
                         val action = parts.getOrNull(2) ?: ""
-                        val time = parts.getOrNull(3) ?: ""
+                        val time = (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() }
+                            ?: parts.getOrNull(3) ?: ""
                         when (action) {
                             "on" -> {
                                 mainActivity?.schedulePowerOn(time)
@@ -770,11 +771,19 @@ class OSCServer(
                                 mainActivity?.schedulePowerOff(time)
                                 response = OSCMessage("/Power", listOf("schedule=off:$time"))
                             }
+                            "shutdown" -> {
+                                mainActivity?.schedulePowerShutdown(time)
+                                response = OSCMessage("/Power", listOf("schedule=shutdown:$time"))
+                            }
+                            "reboot" -> {
+                                mainActivity?.schedulePowerReboot(time)
+                                response = OSCMessage("/Power", listOf("schedule=reboot:$time"))
+                            }
                             "clear" -> {
                                 mainActivity?.schedulePowerClear()
                                 response = OSCMessage("/Power", listOf("schedule=cleared"))
                             }
-                            else -> response = OSCMessage("/Error", listOf("Usage: /power/schedule/on|off|clear/HH:mm"))
+                            else -> response = OSCMessage("/Error", listOf("Usage: /power/schedule/on|off|shutdown|reboot|clear"))
                         }
                     }
                     else -> response = OSCMessage("/Power", listOf("usage: /power/on|off|schedule"))

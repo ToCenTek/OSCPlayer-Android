@@ -140,7 +140,9 @@ OSC 消息格式: **地址 + 参数**, 参数作为 OSC message arguments 发送
 | `/power/reboot` | - | 重启设备 |
 | `/power/schedule/on` | 字符串: HH:mm | 定时开显示器 |
 | `/power/schedule/off` | 字符串: HH:mm | 定时关显示器 |
-| `/power/schedule/clear` | - | 清除电源定时 |
+| `/power/schedule/shutdown` | 字符串: HH:mm | 定时关机 |
+| `/power/schedule/reboot` | 字符串: HH:mm | 定时重启 |
+| `/power/schedule/clear` | - | 清除所有电源定时 |
 
 ### 文件管理
 | 地址 | 参数 | 说明 |

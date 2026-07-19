@@ -82,6 +82,8 @@ class MainActivity : AppCompatActivity() {
     private var scheduleStopTime: String? = null
     private var powerOnTime: String? = null
     private var powerOffTime: String? = null
+    private var powerShutdownTime: String? = null
+    private var powerRebootTime: String? = null
 
     companion object {
         private const val TAG = "MainActivity"
@@ -93,6 +95,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SCHEDULE_STOP = "schedule_stop"
         private const val KEY_POWER_ON = "power_on_time"
         private const val KEY_POWER_OFF = "power_off_time"
+        private const val KEY_POWER_SHUTDOWN = "power_shutdown_time"
+        private const val KEY_POWER_REBOOT = "power_reboot_time"
         private const val KEY_SURFACE_MODE = "surface_mode"
         private const val NSD_SERVICE_TYPE = "_osc._udp."
         private const val NSD_SERVICE_PORT = 8000
@@ -220,6 +224,8 @@ class MainActivity : AppCompatActivity() {
         scheduleStopTime = prefs.getString(KEY_SCHEDULE_STOP, null)
         powerOnTime = prefs.getString(KEY_POWER_ON, null)
         powerOffTime = prefs.getString(KEY_POWER_OFF, null)
+        powerShutdownTime = prefs.getString(KEY_POWER_SHUTDOWN, null)
+        powerRebootTime = prefs.getString(KEY_POWER_REBOOT, null)
 
         startScheduleChecker()
         startPowerScheduleChecker()
@@ -1188,6 +1194,28 @@ class MainActivity : AppCompatActivity() {
                 if (currentMinutes == target) powerOff()
             }
         }
+
+        powerShutdownTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) {
+                    powerShutdownTime = null
+                    Thread { Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot -p")) }.start()
+                }
+            }
+        }
+
+        powerRebootTime?.let { time ->
+            val parts = time.split(":")
+            if (parts.size == 2) {
+                val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
+                if (currentMinutes == target) {
+                    powerRebootTime = null
+                    Thread { Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot")) }.start()
+                }
+            }
+        }
     }
 
     private fun suExec(cmd: String): Boolean = try {
@@ -1229,6 +1257,18 @@ class MainActivity : AppCompatActivity() {
         powerOffTime = time
         prefs.edit().putString(KEY_POWER_OFF, time).apply()
         Log.d(TAG, "Power OFF scheduled at $time")
+    }
+
+    fun schedulePowerShutdown(time: String) {
+        powerShutdownTime = time
+        prefs.edit().putString(KEY_POWER_SHUTDOWN, time).apply()
+        Log.d(TAG, "Shutdown scheduled at $time")
+    }
+
+    fun schedulePowerReboot(time: String) {
+        powerRebootTime = time
+        prefs.edit().putString(KEY_POWER_REBOOT, time).apply()
+        Log.d(TAG, "Reboot scheduled at $time")
     }
 
     fun schedulePowerClear() {
