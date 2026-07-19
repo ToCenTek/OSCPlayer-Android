@@ -16,16 +16,18 @@ class BootWorker(appContext: Context, workerParams: WorkerParameters) : Worker(a
     companion object {
         private const val TAG = "BootWorker"
         private const val WORK_NAME = "oscplayer_boot_check"
+        private const val DEFAULT_INTERVAL_MIN = 30L
 
-        fun schedule(context: Context) {
-            val workRequest = PeriodicWorkRequestBuilder<BootWorker>(30, TimeUnit.MINUTES)
+        fun schedule(context: Context, intervalMinutes: Long = DEFAULT_INTERVAL_MIN) {
+            val actualInterval = intervalMinutes.coerceAtLeast(15L) // WorkManager min 15min
+            val workRequest = PeriodicWorkRequestBuilder<BootWorker>(actualInterval, TimeUnit.MINUTES)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 workRequest
             )
-            Log.d(TAG, "Scheduled periodic health check every 30min")
+            Log.d(TAG, "Scheduled periodic health check every ${actualInterval}min")
         }
 
         fun cancel(context: Context) {

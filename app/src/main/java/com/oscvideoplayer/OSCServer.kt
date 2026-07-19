@@ -649,6 +649,36 @@ class OSCServer(
                             response = OSCMessage("/Config", listOf("startup=${helloVideos?.name ?: "none"}"))
                         }
                     }
+                    "keepalive" -> {
+                        val sub = parts.getOrNull(2) ?: ""
+                        when {
+                            sub == "alarm" -> {
+                                val secs = parts.getOrNull(3)?.toIntOrNull()
+                                    ?: (msg.args.getOrNull(0) as? Number)?.toInt() ?: 0
+                                if (secs > 0) {
+                                    mainActivity?.setKeepaliveAlarm(secs)
+                                    response = OSCMessage("/Config", listOf("keepalive_alarm=${secs}s"))
+                                } else {
+                                    response = OSCMessage("/Config", listOf("keepalive_alarm=${mainActivity?.getKeepaliveAlarm() ?: 60}s"))
+                                }
+                            }
+                            sub == "workmanager" -> {
+                                val mins = parts.getOrNull(3)?.toLongOrNull()
+                                    ?: (msg.args.getOrNull(0) as? Number)?.toLong() ?: 0L
+                                if (mins > 0) {
+                                    mainActivity?.setKeepaliveWorkmanager(mins)
+                                    response = OSCMessage("/Config", listOf("keepalive_workmanager=${mins}min"))
+                                } else {
+                                    response = OSCMessage("/Config", listOf("keepalive_workmanager=${mainActivity?.getKeepaliveWorkmanager() ?: 30}min"))
+                                }
+                            }
+                            else -> {
+                                val alarm = mainActivity?.getKeepaliveAlarm() ?: 60
+                                val wm = mainActivity?.getKeepaliveWorkmanager() ?: 30
+                                response = OSCMessage("/Config", listOf("alarm=${alarm}s  workmanager=${wm}min"))
+                            }
+                        }
+                    }
                     "reload" -> {
                         mainActivity?.reloadVideos()
                         response = OSCMessage("/Config", listOf("reloaded"))

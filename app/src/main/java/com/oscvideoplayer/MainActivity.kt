@@ -145,9 +145,6 @@ class MainActivity : AppCompatActivity() {
         val isFromBoot = intent.getBooleanExtra("from_boot", false)
         Log.d(TAG, "onCreate: isFromBoot=$isFromBoot")
 
-        BootWorker.schedule(this)
-        AlarmReceiver.schedule(this)
-
         val videoPath = intent.getStringExtra("video_path")
         pendingVideoPath = videoPath
 
@@ -199,6 +196,10 @@ class MainActivity : AppCompatActivity() {
         isInitialized = true
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val keepaliveAlarm = prefs?.getInt("keepalive_alarm_seconds", 60) ?: 60
+        val keepaliveWm = prefs?.getLong("keepalive_workmanager_minutes", 30L) ?: 30L
+        BootWorker.schedule(this, keepaliveWm)
+        AlarmReceiver.schedule(this, keepaliveAlarm * 1000L)
 
         videoScanner = VideoScanner(this).also {
             it.watchDirectory(File(getDefaultDirectory()))
@@ -1031,6 +1032,24 @@ class MainActivity : AppCompatActivity() {
         videoScanner?.invalidateCache()
         rebuildPlaylist()
         Log.d(TAG, "Video cache cleared, playlist rebuilt")
+    }
+
+    fun getKeepaliveAlarm(): Int = prefs?.getInt("keepalive_alarm_seconds", 60) ?: 60
+
+    fun setKeepaliveAlarm(seconds: Int) {
+        val s = seconds.coerceIn(10, 600)
+        prefs?.edit()?.putInt("keepalive_alarm_seconds", s)?.apply()
+        AlarmReceiver.schedule(this, s * 1000L)
+        Log.d(TAG, "Keepalive alarm set to ${s}s")
+    }
+
+    fun getKeepaliveWorkmanager(): Long = prefs?.getLong("keepalive_workmanager_minutes", 30L) ?: 30L
+
+    fun setKeepaliveWorkmanager(minutes: Long) {
+        val m = minutes.coerceIn(15, 1440)
+        prefs?.edit()?.putLong("keepalive_workmanager_minutes", m)?.apply()
+        BootWorker.schedule(this, m)
+        Log.d(TAG, "Keepalive workmanager set to ${m}min")
     }
 
     fun restartPlayer() {

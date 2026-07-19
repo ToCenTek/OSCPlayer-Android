@@ -59,9 +59,9 @@ class AlarmReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "AlarmReceiver"
         private const val REQUEST_CODE = 1001
-        private const val INTERVAL_MS = 60_000L
-        
-        fun schedule(context: Context) {
+        private const val DEFAULT_INTERVAL_MS = 60_000L
+
+        fun schedule(context: Context, intervalMs: Long = DEFAULT_INTERVAL_MS) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             
             val intent = Intent(context, AlarmReceiver::class.java)
@@ -75,11 +75,11 @@ class AlarmReceiver : BroadcastReceiver() {
             try {
                 alarmManager.setInexactRepeating(
                     AlarmManager.RTC_WAKEUP,
-                    System.currentTimeMillis() + 30000,
-                    INTERVAL_MS,
+                    System.currentTimeMillis() + minOf(30000L, intervalMs / 2),
+                    intervalMs,
                     pendingIntent
                 )
-                Log.d(TAG, "Repeating alarm scheduled every ${INTERVAL_MS / 60000}min")
+                Log.d(TAG, "Repeating alarm scheduled every ${intervalMs / 1000}s")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to schedule repeating alarm: ${e.message}")
             }
