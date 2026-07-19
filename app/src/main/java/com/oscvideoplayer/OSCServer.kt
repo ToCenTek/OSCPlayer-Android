@@ -586,14 +586,11 @@ class OSCServer(
 
             "port" -> {
                 var replyInfo = "Port set"
-                if (msg.args.size >= 2) {
-                    val name = msg.args[0]?.toString() ?: ""
-                    val portStr = msg.args[1]?.toString() ?: ""
-                    val port = portStr.toIntOrNull() ?: 0
-                    if (port > 0) {
-                        updateClientReplyPort(client.address, port)
-                        replyInfo = "Hello, $name:$port"
-                    }
+                val port = if (parts.size > 1) parts[1].toIntOrNull()
+                          else (msg.args.getOrNull(0) as? Number)?.toInt()
+                if (port != null && port > 0) {
+                    updateClientReplyPort(client.address, port)
+                    replyInfo = "Port: $port"
                 }
                 response = OSCMessage("/OSCPlayer", listOf(replyInfo))
             }
@@ -838,11 +835,8 @@ class OSCServer(
 
     private fun sendShutdown() {
         try {
-            val intent = android.content.Intent("android.intent.action.ACTION_REQUEST_SHUTDOWN").apply {
-                putExtra("android.intent.extra.KEY_CONFIRM", false)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            serviceContext?.startActivity(intent)
+            Runtime.getRuntime().exec("su -c 'reboot -p'")
+            Log.d(TAG, "Shutdown command sent")
         } catch (e: Exception) {
             Log.e(TAG, "Shutdown failed: ${e.message}")
         }
@@ -850,11 +844,8 @@ class OSCServer(
 
     private fun sendReboot() {
         try {
-            val intent = android.content.Intent(android.content.Intent.ACTION_REBOOT).apply {
-                putExtra("android.intent.extra.KEY_CONFIRM", false)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            serviceContext?.startActivity(intent)
+            Runtime.getRuntime().exec("su -c 'reboot'")
+            Log.d(TAG, "Reboot command sent")
         } catch (e: Exception) {
             Log.e(TAG, "Reboot failed: ${e.message}")
         }

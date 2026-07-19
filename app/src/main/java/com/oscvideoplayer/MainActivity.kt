@@ -66,7 +66,8 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var cachedPosition = 0L
     @Volatile
-    private var cachedVolume = 1.0f
+    private var cachedVolume = 0f
+    private var savedVolume = 0f
     private var debugOverlayEnabled = false
 
     private lateinit var prefs: SharedPreferences
@@ -742,10 +743,10 @@ class MainActivity : AppCompatActivity() {
         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
         val currentVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
         if (currentVol > 0) {
-            cachedVolume = currentVol.toFloat()
+            savedVolume = currentVol.toFloat()
             am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
         } else {
-            val targetVol = cachedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
+            val targetVol = savedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
             am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
         }
     }
@@ -757,16 +758,14 @@ class MainActivity : AppCompatActivity() {
 
     fun mute() {
         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-        cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
+        savedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
         am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
     }
 
     fun unmute() {
         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
-        if (am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) == 0) {
-            val targetVol = cachedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
-            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
-        }
+        val targetVol = savedVolume.toInt().coerceIn(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC))
+        am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVol, 0)
     }
 
     fun setLoop(enabled: Boolean) {
@@ -1172,17 +1171,8 @@ class MainActivity : AppCompatActivity() {
 
     fun powerOn() {
         try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                pm.isPowerSaveMode
-            }
-            val wl = pm.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                "OSCPlayer:PowerOn"
-            )
-            wl.acquire(10000)
-            wl.release()
-            Log.d(TAG, "Display power ON requested")
+            Runtime.getRuntime().exec("su -c 'input keyevent KEYCODE_WAKEUP'")
+            Log.d(TAG, "Display power ON")
         } catch (e: Exception) {
             Log.e(TAG, "Power on failed: ${e.message}")
         }
@@ -1190,27 +1180,9 @@ class MainActivity : AppCompatActivity() {
 
     fun powerOff() {
         try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            @Suppress("DEPRECATION")
-            val goToSleep = android.provider.Settings::class.java.getMethod(
-                "putInt",
-                android.content.ContentResolver::class.java,
-                String::class.java,
-                Int::class.java
-            )
-            Log.d(TAG, "Display power OFF requested")
-
-            runOnUiThread {
-                player?.pause()
-                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                try {
-                    val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OSCPlayer:Background")
-                    wl.acquire(5000)
-                    wl.release()
-                } catch (e2: Exception) {
-                    Log.e(TAG, "Wake lock error: ${e2.message}")
-                }
-            }
+            player?.pause()
+            Runtime.getRuntime().exec("su -c 'input keyevent KEYCODE_SLEEP'")
+            Log.d(TAG, "Display power OFF")
         } catch (e: Exception) {
             Log.e(TAG, "Power off failed: ${e.message}")
         }
