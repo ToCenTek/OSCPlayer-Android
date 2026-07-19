@@ -289,13 +289,20 @@ class MainActivity : AppCompatActivity() {
 
     fun getVideoKeyframes(path: String): Triple<Long, Long, Double>? {
         return try {
+            Log.d(TAG, "getVideoKeyframes: " + path)
             val extractor = android.media.MediaExtractor()
             extractor.setDataSource(path)
-            val videoTrack = (0 until extractor.trackCount).firstOrNull { i ->
-                extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
-            } ?: run { extractor.release(); return null }
-            val format = extractor.getTrackFormat(videoTrack)
+            val trackCount = extractor.trackCount
+            Log.d(TAG, "  tracks=" + trackCount)
+            val videoTrack = (0 until trackCount).firstOrNull { i ->
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(android.media.MediaFormat.KEY_MIME)
+                Log.d(TAG, "  track[" + i + "] mime=" + mime)
+                mime?.startsWith("video/") == true
+            } ?: run { extractor.release(); Log.d(TAG, "  no video track"); return null }
             extractor.selectTrack(videoTrack)
+            val format = extractor.getTrackFormat(videoTrack)
+            Log.d(TAG, "  videoTrack=" + videoTrack + " format=" + format.getString(android.media.MediaFormat.KEY_MIME))
             var fps = 0.0
             if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
                 fps = format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble()
@@ -308,12 +315,16 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
             val durationUs = try { format.getLong(android.media.MediaFormat.KEY_DURATION) } catch (_: Exception) { 0L }
+            Log.d(TAG, "  fps=" + fps + " durationUs=" + durationUs)
             var kfCount = 0
             var secondKf = 0L
             var lastKf = 0L
+            var sampleIdx = 0
             // Phase 1: scan from start to find 2nd keyframe, tracking last
             while (extractor.advance()) {
-                if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                val flags = extractor.sampleFlags
+                sampleIdx++
+                if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                     kfCount++
                     val t = extractor.sampleTime / 1000
                     if (kfCount == 2) { secondKf = t; if (lastKf <= 0) lastKf = t }
@@ -334,6 +345,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             extractor.release()
+            Log.d(TAG, "  result: kfCount=" + kfCount + " secondKf=" + secondKf + " lastKf=" + lastKf + " fps=" + fps + " samples=" + sampleIdx)
             if (secondKf <= 0) return null
             Triple(secondKf, lastKf, fps)
         } catch (_: Exception) { null }
