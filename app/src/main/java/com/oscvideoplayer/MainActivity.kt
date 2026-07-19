@@ -1115,7 +1115,7 @@ class MainActivity : AppCompatActivity() {
                 val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
                 if (currentMinutes == target) {
                     withContext(Dispatchers.Main) {
-                        if (currentVideoPath == null) autoPlayHelloVideo()
+                        autoPlayHelloVideo()
                     }
                 }
             }
