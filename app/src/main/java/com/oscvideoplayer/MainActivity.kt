@@ -306,21 +306,26 @@ class MainActivity : AppCompatActivity() {
                     r.release()
                 } catch (_: Exception) {}
             }
-            var kfCount = 0
-            var secondKf = 0L
-            var lastKf = 0L
-            // scan ALL frames to reliably find 2nd and last keyframes
+            var kfTimes = mutableListOf<Long>()
+            var sampleCount = 0
+            // scan ALL frames to find keyframes
             while (extractor.advance()) {
+                sampleCount++
                 try {
-                    if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                        kfCount++
-                        val t = extractor.sampleTime / 1000
-                        if (kfCount == 2) secondKf = t
-                        lastKf = t
+                    val flags = extractor.sampleFlags
+                    val time = extractor.sampleTime
+                    if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                        kfTimes.add(time / 1000)
                     }
                 } catch (_: Exception) {}
             }
             extractor.release()
+            if (kfTimes.size < 2) return null
+            val secondKf = kfTimes[1]
+            if (secondKf <= 0) return null
+            // filter out trailing zero timestamps (Amlogic platform bug)
+            while (kfTimes.size > 1 && kfTimes.last() == 0L) kfTimes.removeAt(kfTimes.lastIndex)
+            val lastKf = kfTimes.last()
             if (secondKf <= 0) return null
             Triple(secondKf, lastKf, fps)
         } catch (_: Exception) { null }
