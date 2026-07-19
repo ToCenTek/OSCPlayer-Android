@@ -386,13 +386,24 @@ class OSCServer(
                         for ((i, it) in items.withIndex()) {
                             val name = it["name"] ?: ""
                             val path = it["path"] as? String ?: ""
-                            val kfs = if (path.isNotEmpty()) {
-                                val f = java.io.File(path)
-                                if (f.exists()) mainActivity?.getVideoKeyframes(path) else null
-                            } else null
-                            val args = mutableListOf(i.toString(), name)
-                            if (kfs != null) { args.add(kfs.first.toString()); args.add(kfs.second.toString()) }
-                            sendResponse(OSCMessage("/Playlist", args), client)
+                            var duration = 0L; var fps = 0.0; var secondKf = 0L; var lastKf = 0L
+                            if (path.isNotEmpty() && java.io.File(path).exists()) {
+                                try {
+                                    val r = android.media.MediaMetadataRetriever()
+                                    r.setDataSource(path)
+                                    val d = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                                    duration = d
+                                    val fpsRaw = r.extractMetadata(30)?.toDoubleOrNull() ?: 0.0
+                                    fps = fpsRaw
+                                    r.release()
+                                } catch (_: Exception) {}
+                                val kfs = mainActivity?.getVideoKeyframes(path)
+                                if (kfs != null) { secondKf = kfs.first; lastKf = kfs.second }
+                            }
+                            sendResponse(OSCMessage("/Playlist", listOf(
+                                i.toString(), name, duration.toString(), fps.toString(),
+                                secondKf.toString(), lastKf.toString()
+                            )), client)
                         }
                         return
                     }
