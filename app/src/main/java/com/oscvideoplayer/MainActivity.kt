@@ -1190,13 +1190,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun suExec(cmd: String): Boolean = try {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        p.waitFor() == 0
+    } catch (_: Exception) { false }
+
     fun powerOn() {
         try {
-            // try Amlogic sysfs first, fallback to keyevent
-            try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "echo 0 > /sys/class/graphics/fb0/blank"))
-            } catch (_: Exception) {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent 26")) // KEYCODE_POWER
+            player?.play()
+            if (!suExec("echo on 0 > /sys/class/cec/cmd")) {
+                suExec("echo 0 > /sys/class/graphics/fb0/blank")
             }
             Log.d(TAG, "Display power ON")
         } catch (e: Exception) {
@@ -1207,10 +1210,8 @@ class MainActivity : AppCompatActivity() {
     fun powerOff() {
         try {
             player?.pause()
-            try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "echo 1 > /sys/class/graphics/fb0/blank"))
-            } catch (_: Exception) {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent 26")) // KEYCODE_POWER
+            if (!suExec("echo standby 0 > /sys/class/cec/cmd")) {
+                suExec("echo 1 > /sys/class/graphics/fb0/blank")
             }
             Log.d(TAG, "Display power OFF")
         } catch (e: Exception) {
