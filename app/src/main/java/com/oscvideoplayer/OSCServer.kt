@@ -77,8 +77,8 @@ class OSCServer(
     )
 
     private fun getClient(address: InetAddress, sourcePort: Int): ClientInfo {
-        val key = address.hostAddress ?: return ClientInfo(address, sourcePort, sourcePort)
-        return clients.getOrPut(key) { ClientInfo(address, sourcePort, sourcePort) }
+        val key = address.hostAddress ?: return ClientInfo(address, sourcePort, 12000)
+        return clients.getOrPut(key) { ClientInfo(address, sourcePort, 12000) }
     }
 
     private fun updateClientReplyPort(address: InetAddress, replyPort: Int) {
@@ -653,8 +653,8 @@ class OSCServer(
                         val sub = parts.getOrNull(2) ?: ""
                         when {
                             sub == "alarm" -> {
-                                val secs = parts.getOrNull(3)?.toIntOrNull()
-                                    ?: (msg.args.getOrNull(0) as? Number)?.toInt() ?: 0
+                                val secs = (msg.args.getOrNull(0) as? Number)?.toInt()
+                                    ?: parts.getOrNull(3)?.toIntOrNull() ?: 0
                                 if (secs > 0) {
                                     mainActivity?.setKeepaliveAlarm(secs)
                                     response = OSCMessage("/Config", listOf("keepalive_alarm=${secs}s"))
@@ -663,8 +663,8 @@ class OSCServer(
                                 }
                             }
                             sub == "workmanager" -> {
-                                val mins = parts.getOrNull(3)?.toLongOrNull()
-                                    ?: (msg.args.getOrNull(0) as? Number)?.toLong() ?: 0L
+                                val mins = (msg.args.getOrNull(0) as? Number)?.toLong()
+                                    ?: parts.getOrNull(3)?.toLongOrNull() ?: 0L
                                 if (mins > 0) {
                                     mainActivity?.setKeepaliveWorkmanager(mins)
                                     response = OSCMessage("/Config", listOf("keepalive_workmanager=${mins}min"))

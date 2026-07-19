@@ -1037,7 +1037,7 @@ class MainActivity : AppCompatActivity() {
     fun getKeepaliveAlarm(): Int = prefs?.getInt("keepalive_alarm_seconds", 60) ?: 60
 
     fun setKeepaliveAlarm(seconds: Int) {
-        val s = seconds.coerceIn(10, 600)
+        val s = seconds.coerceIn(5, 600)
         prefs?.edit()?.putInt("keepalive_alarm_seconds", s)?.apply()
         AlarmReceiver.schedule(this, s * 1000L)
         Log.d(TAG, "Keepalive alarm set to ${s}s")
@@ -1054,10 +1054,12 @@ class MainActivity : AppCompatActivity() {
 
     fun restartPlayer() {
         runOnUiThread {
+            val path = currentVideoPath ?: return@runOnUiThread
             player?.stop()
             player?.clearMediaItems()
-            player?.seekTo(0)
+            player?.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(java.io.File(path))))
             player?.prepare()
+            player?.seekTo(0)
             player?.play()
         }
     }
@@ -1190,7 +1192,12 @@ class MainActivity : AppCompatActivity() {
 
     fun powerOn() {
         try {
-            Runtime.getRuntime().exec("su -c 'input keyevent KEYCODE_WAKEUP'")
+            // try Amlogic sysfs first, fallback to keyevent
+            try {
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "echo 0 > /sys/class/graphics/fb0/blank"))
+            } catch (_: Exception) {
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent 26")) // KEYCODE_POWER
+            }
             Log.d(TAG, "Display power ON")
         } catch (e: Exception) {
             Log.e(TAG, "Power on failed: ${e.message}")
@@ -1200,7 +1207,11 @@ class MainActivity : AppCompatActivity() {
     fun powerOff() {
         try {
             player?.pause()
-            Runtime.getRuntime().exec("su -c 'input keyevent KEYCODE_SLEEP'")
+            try {
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "echo 1 > /sys/class/graphics/fb0/blank"))
+            } catch (_: Exception) {
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "input keyevent 26")) // KEYCODE_POWER
+            }
             Log.d(TAG, "Display power OFF")
         } catch (e: Exception) {
             Log.e(TAG, "Power off failed: ${e.message}")

@@ -118,6 +118,9 @@ OSC 消息格式: **地址 + 参数**, 参数作为 OSC message arguments 发送
 | `/config/watchdog` | 整数: 0/1 | 0=关闭, 1=开启看门狗 |
 | `/config/heartbeat` | - | 看门狗心跳 |
 | `/config/reload` | - | 重新扫描视频 (固定排序) |
+| `/config/keepalive` | - | 查看保活间隔 (alarm=N秒, workmanager=N分钟) |
+| `/config/keepalive/alarm` | 整数: 5-600秒 | 设置 AlarmReceiver 保活间隔 |
+| `/config/keepalive/workmanager` | 整数: 15-1440分钟 | 设置 WorkManager 健康检查间隔 |
 
 ### 定时
 | 地址 | 参数 | 说明 |
