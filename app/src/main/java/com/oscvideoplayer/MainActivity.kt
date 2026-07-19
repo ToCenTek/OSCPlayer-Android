@@ -92,6 +92,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SCHEDULE_STOP = "schedule_stop"
         private const val KEY_POWER_ON = "power_on_time"
         private const val KEY_POWER_OFF = "power_off_time"
+        private const val KEY_SURFACE_MODE = "surface_mode"
         private const val NSD_SERVICE_TYPE = "_osc._udp."
         private const val NSD_SERVICE_PORT = 8000
         @Volatile
@@ -131,7 +132,12 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUI()
         setContentView(R.layout.activity_main)
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         playerView = findViewById(R.id.playerView)
+        if (playerView == null) {
+            inflatePlayerView()
+            playerView = findViewById(R.id.playerView)
+        }
 
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
@@ -176,6 +182,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             startApp(playVideoPath)
         }
+    }
+
+    private fun inflatePlayerView() {
+        val container = findViewById<android.widget.FrameLayout>(com.oscvideoplayer.R.id.playerContainer) ?: return
+        val useSurface = prefs?.getBoolean(KEY_SURFACE_MODE, true) ?: true
+        val layoutRes = if (useSurface) com.oscvideoplayer.R.layout.player_view_surface
+                       else com.oscvideoplayer.R.layout.player_view_texture
+        container.removeAllViews()
+        android.view.LayoutInflater.from(this).inflate(layoutRes, container, true)
     }
 
     private fun startApp(playVideoPath: String? = null) {
@@ -1474,6 +1489,7 @@ class MainActivity : AppCompatActivity() {
 
     // --- Settings Menu ---
     private fun showSettingsMenu() {
+        val isSurface = prefs?.getBoolean(KEY_SURFACE_MODE, true) ?: true
         showMenuWithWrap("系统设置", arrayOf(
             "定时开机",
             "定时关机",
@@ -1485,6 +1501,7 @@ class MainActivity : AppCompatActivity() {
             "返回系统桌面",
             "恢复默认设置",
             "调试信息",
+            if (isSurface) "▸ 性能模式" else "▸ 调试模式",
             "退出应用"
         )) { which ->
             when (which) {
@@ -1511,7 +1528,13 @@ class MainActivity : AppCompatActivity() {
                     toggleDebugOverlay()
                     Toast.makeText(this, "调试信息: ${if (debugOverlayEnabled) "开" else "关"}", Toast.LENGTH_SHORT).show()
                 }
-                10 -> finish()
+                10 -> {
+                    val newMode = !isSurface
+                    prefs?.edit()?.putBoolean(KEY_SURFACE_MODE, newMode)?.apply()
+                    Toast.makeText(this, "切换至${if (newMode) "性能" else "调试"}模式, 重启中...", Toast.LENGTH_SHORT).show()
+                    recreate()
+                }
+                11 -> finish()
             }
         }
     }

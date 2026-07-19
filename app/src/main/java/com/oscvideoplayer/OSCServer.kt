@@ -244,6 +244,11 @@ class OSCServer(
                 response = OSCMessage("/Stopped", listOf(""))
             }
 
+            "playpause" -> {
+                mainActivity?.togglePause()
+                response = OSCMessage("/Paused", listOf(mainActivity?.isPaused() == true))
+            }
+
             "pause" -> {
                 val sub = parts.getOrNull(1) ?: ""
                 if (sub == "toggle") {
