@@ -289,23 +289,15 @@ class MainActivity : AppCompatActivity() {
 
     fun getVideoKeyframes(path: String): Triple<Long, Long, Double>? {
         return try {
-            Log.d(TAG, "getVideoKeyframes: " + path)
             val extractor = android.media.MediaExtractor()
             extractor.setDataSource(path)
             val trackCount = extractor.trackCount
-            Log.d(TAG, "  tracks=" + trackCount)
             val videoTrack = (0 until trackCount).firstOrNull { i ->
-                val fmt = extractor.getTrackFormat(i)
-                val mime = fmt.getString(android.media.MediaFormat.KEY_MIME)
-                Log.d(TAG, "  track[" + i + "] mime=" + mime)
-                mime?.startsWith("video/") == true
-            } ?: run { extractor.release(); Log.d(TAG, "  no video track"); return null }
+                try { extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true } catch (_: Exception) { false }
+            } ?: run { extractor.release(); return null }
             extractor.selectTrack(videoTrack)
             val format = extractor.getTrackFormat(videoTrack)
-            Log.d(TAG, "  videoTrack=" + videoTrack + " format=" + format.getString(android.media.MediaFormat.KEY_MIME))
-            var fps = 0.0
-            if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
-                fps = format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble()
+            var fps = try { if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE)) format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() else 0.0 } catch (_: Exception) { 0.0 }
             if (fps <= 0.0) {
                 try {
                     val r = android.media.MediaMetadataRetriever()
@@ -314,38 +306,21 @@ class MainActivity : AppCompatActivity() {
                     r.release()
                 } catch (_: Exception) {}
             }
-            val durationUs = try { format.getLong(android.media.MediaFormat.KEY_DURATION) } catch (_: Exception) { 0L }
-            Log.d(TAG, "  fps=" + fps + " durationUs=" + durationUs)
             var kfCount = 0
             var secondKf = 0L
             var lastKf = 0L
-            var sampleIdx = 0
-            // Phase 1: scan from start to find 2nd keyframe, tracking last
+            // scan ALL frames to reliably find 2nd and last keyframes
             while (extractor.advance()) {
-                val flags = extractor.sampleFlags
-                sampleIdx++
-                if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                    kfCount++
-                    val t = extractor.sampleTime / 1000
-                    if (kfCount == 2) { secondKf = t; if (lastKf <= 0) lastKf = t }
-                    else if (kfCount > 2) lastKf = t
-                    if (kfCount >= 2 && t > 0 && kfCount >= 3) break
-                }
-            }
-            // Phase 2: if duration available, seek near end to find actual last keyframe
-            if (durationUs > 0 && lastKf > 0) {
-                val seekUs = (durationUs - 200_000).coerceAtLeast(0L)
-                extractor.seekTo(seekUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-                val st = extractor.sampleTime
-                if (st >= 0) lastKf = st / 1000
-                while (extractor.advance()) {
+                try {
                     if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                        lastKf = extractor.sampleTime / 1000
+                        kfCount++
+                        val t = extractor.sampleTime / 1000
+                        if (kfCount == 2) secondKf = t
+                        lastKf = t
                     }
-                }
+                } catch (_: Exception) {}
             }
             extractor.release()
-            Log.d(TAG, "  result: kfCount=" + kfCount + " secondKf=" + secondKf + " lastKf=" + lastKf + " fps=" + fps + " samples=" + sampleIdx)
             if (secondKf <= 0) return null
             Triple(secondKf, lastKf, fps)
         } catch (_: Exception) { null }
