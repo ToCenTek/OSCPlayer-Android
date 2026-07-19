@@ -287,6 +287,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    fun getVideoKeyframes(path: String): Pair<Long, Long>? {
+        return try {
+            val extractor = android.media.MediaExtractor()
+            extractor.setDataSource(path)
+            val videoTrack = (0 until extractor.trackCount).firstOrNull { i ->
+                extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            } ?: run { extractor.release(); return null }
+            extractor.selectTrack(videoTrack)
+            val durationUs = extractor.getTrackFormat(videoTrack).getLong(android.media.MediaFormat.KEY_DURATION)
+            var kfCount = 0
+            var secondKf = 0L
+            var lastKf = 0L
+            // scan from start to find 2nd keyframe
+            while (extractor.advance()) {
+                if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                    kfCount++
+                    if (kfCount == 2) { secondKf = extractor.sampleTime / 1000; break }
+                }
+            }
+            // seek near end to find last keyframe
+            extractor.seekTo((durationUs - 100_000).coerceAtLeast(0), android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            lastKf = extractor.sampleTime / 1000
+            // advance to the actual last keyframe (there might be one more after seek)
+            while (extractor.advance()) {
+                if (extractor.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                    lastKf = extractor.sampleTime / 1000
+                }
+            }
+            extractor.release()
+            if (secondKf <= 0) return null
+            Pair(secondKf, lastKf)
+        } catch (_: Exception) { null }
+    }
+
     fun getLocalIPAddress(): String? {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()

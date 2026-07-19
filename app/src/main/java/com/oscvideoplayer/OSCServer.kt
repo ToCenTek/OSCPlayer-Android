@@ -242,7 +242,23 @@ class OSCServer(
             "discover" -> {
                 val ip = mainActivity?.getLocalIPAddress() ?: "unknown"
                 val mac = mainActivity?.getMacAddress() ?: "unknown"
-                response = OSCMessage("/Discover", listOf("ip=$ip", "mac=$mac"))
+                response = OSCMessage("/Discover", listOf(ip, mac))
+            }
+
+            "getgop" -> {
+                val name = if (parts.size > 1) parts.subList(1, parts.size).joinToString("/") else ""
+                         ?: (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: ""
+                val videoPath = findVideo(name)
+                if (videoPath != null) {
+                    val kfs = mainActivity?.getVideoKeyframes(videoPath)
+                    if (kfs != null) {
+                        response = OSCMessage("/GOP", listOf(kfs.first.toString(), kfs.second.toString()))
+                    } else {
+                        response = OSCMessage("/Error", listOf("Cannot read GOP: $name"))
+                    }
+                } else {
+                    response = OSCMessage("/Error", listOf("Video not found: $name"))
+                }
             }
 
             "stop" -> {
@@ -367,8 +383,18 @@ class OSCServer(
                     }
                     "get" -> {
                         val items = mainActivity?.getPlaylistItems() ?: emptyList()
-                        val lines = items.mapIndexed { i, it -> "$i: ${it["name"]}" }
-                        response = OSCMessage("/Playlist", listOf(lines.joinToString("\n")))
+                        for ((i, it) in items.withIndex()) {
+                            val name = it["name"] ?: ""
+                            val path = it["path"] as? String ?: ""
+                            val kfs = if (path.isNotEmpty()) {
+                                val f = java.io.File(path)
+                                if (f.exists()) mainActivity?.getVideoKeyframes(path) else null
+                            } else null
+                            val args = mutableListOf(i.toString(), name)
+                            if (kfs != null) { args.add(kfs.first.toString()); args.add(kfs.second.toString()) }
+                            sendResponse(OSCMessage("/Playlist", args), client)
+                        }
+                        return
                     }
                     else -> response = OSCMessage("/Error", listOf("Unknown playlist command"))
                 }
