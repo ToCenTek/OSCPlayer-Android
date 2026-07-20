@@ -21,6 +21,8 @@ class OSCServer(
 
     companion object {
         private const val TAG = "OSCServer"
+        private const val MULTICAST_ADDR = "239.0.0.139"
+        private const val MULTICAST_PORT = 9000
         private var instance: OSCServer? = null
         private var pendingVideoPath: String? = null
         private var pendingActivity: MainActivity? = null
@@ -63,6 +65,7 @@ class OSCServer(
     }
 
     private var socket: DatagramSocket? = null
+    private var multiSocket: java.net.MulticastSocket? = null
     private var isRunning = false
     @Volatile
     private var mainActivity: MainActivity? = null
@@ -108,12 +111,39 @@ class OSCServer(
                 Log.e(TAG, "Server error: ${e.message}")
             }
         }
+        // multicast listener thread
+        thread {
+            try {
+                val addr = java.net.InetAddress.getByName(MULTICAST_ADDR)
+                val ms = java.net.MulticastSocket(MULTICAST_PORT)
+                ms.joinGroup(addr)
+                ms.soTimeout = 5000
+                multiSocket = ms
+                Log.d(TAG, "Multicast listener on $MULTICAST_ADDR:$MULTICAST_PORT")
+                val buf = ByteArray(8192)
+                while (isRunning) {
+                    try {
+                        val p = DatagramPacket(buf, buf.size)
+                        ms.receive(p)
+                        Log.d(TAG, "[MCAST] from ${p.address.hostAddress}:${p.port}")
+                        val client = getClient(p.address, p.port)
+                        processMessage(p.data, p.length, client)
+                    } catch (e: java.net.SocketTimeoutException) { /* timeout ok */ }
+                      catch (e: Exception) { if (isRunning) Log.e(TAG, "Mcast error: ${e.message}") }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Multicast init error: ${e.message}")
+            }
+        }
     }
 
     fun stop() {
         isRunning = false
         socket?.close()
         socket = null
+        try { multiSocket?.leaveGroup(java.net.InetAddress.getByName(MULTICAST_ADDR)) } catch (_: Exception) {}
+        multiSocket?.close()
+        multiSocket = null
         instance = null
     }
 
