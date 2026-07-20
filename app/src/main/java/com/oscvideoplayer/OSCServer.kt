@@ -1009,11 +1009,12 @@ class OSCServer(
             if (ipStr.startsWith("/")) ipStr = ipStr.substring(1)
             val targetAddress = InetAddress.getByName(ipStr)
             val packet = DatagramPacket(data, data.size, targetAddress, targetPort)
-            // use a temporary unicast socket for sending (MulticastSocket.send may fail on some devices)
-            DatagramSocket().use { s -> s.send(packet) }
+            Log.d(TAG, "Sending to $ipStr:$targetPort data=${data.size}B")
+            val s = java.net.DatagramSocket()
+            try { s.send(packet) } finally { s.close() }
             Log.d(TAG, "[SEND] ${msg.address} to $ipStr:$targetPort")
         } catch (e: Exception) {
-            Log.e(TAG, "Send error: ${e.message}")
+            Log.e(TAG, "Send error: ${e.message} type=${e.javaClass.simpleName}")
         }
     }
 
