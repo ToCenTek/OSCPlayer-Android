@@ -64,6 +64,7 @@ class OSCServer(
     }
 
     private var socket: java.net.MulticastSocket? = null
+    private var multiLock: android.net.wifi.WifiManager.MulticastLock? = null
     private var isRunning = false
     @Volatile
     private var mainActivity: MainActivity? = null
@@ -95,7 +96,13 @@ class OSCServer(
                 val ms = java.net.MulticastSocket(port)
                 ms.joinGroup(java.net.InetAddress.getByName(MULTICAST_ADDR))
                 socket = ms
-                Log.d(TAG, "OSC Server started on port $port (unicast + multicast $MULTICAST_ADDR)")
+                try {
+                    val wifi = serviceContext?.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                    multiLock = wifi?.createMulticastLock("OSCPlayerMulticast")
+                    multiLock?.setReferenceCounted(false)
+                    multiLock?.acquire()
+                } catch (_: Exception) {}
+                Log.d(TAG, "OSC Server started on port $port")
                 val buffer = ByteArray(8192)
                 while (isRunning) {
                     try {
@@ -118,6 +125,8 @@ class OSCServer(
 
     fun stop() {
         isRunning = false
+        try { multiLock?.release() } catch (_: Exception) {}
+        multiLock = null
         try { socket?.leaveGroup(java.net.InetAddress.getByName(MULTICAST_ADDR)) } catch (_: Exception) {}
         socket?.close()
         socket = null
