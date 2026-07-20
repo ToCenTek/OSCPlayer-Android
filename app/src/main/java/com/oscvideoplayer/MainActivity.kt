@@ -310,16 +310,25 @@ class MainActivity : AppCompatActivity() {
             }
             var kfTimes = mutableListOf<Long>()
             var sampleCount = 0
-            // scan ALL frames to find keyframes
+            var firstFrameTime = -1L
+            var secondFrameTime = -1L
+            // scan ALL frames to find keyframes, also compute fps from frame durations
             while (extractor.advance()) {
                 sampleCount++
                 try {
                     val flags = extractor.sampleFlags
                     val time = extractor.sampleTime
+                    if (firstFrameTime < 0) firstFrameTime = time
+                    else if (secondFrameTime < 0) secondFrameTime = time
                     if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                         kfTimes.add(time / 1000)
                     }
                 } catch (_: Exception) {}
+            }
+            // compute fps from first two frame timestamps if metadata failed
+            if (fps <= 0.0 && firstFrameTime > 0 && secondFrameTime > firstFrameTime) {
+                val frameDurUs = secondFrameTime - firstFrameTime
+                if (frameDurUs > 0) fps = 1_000_000.0 / frameDurUs
             }
             extractor.release()
             if (kfTimes.size < 1) return null
@@ -387,7 +396,7 @@ class MainActivity : AppCompatActivity() {
         val name = currentVideoPath?.substringAfterLast("/") ?: ""
         val pos = p?.currentPosition ?: cachedPosition
         val dur = p?.duration ?: 0L
-        com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, name, pos, dur)
+        com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, name, pos, dur, videoFrameRate)
     }
 
     fun getLocalIPAddress(): String? {
