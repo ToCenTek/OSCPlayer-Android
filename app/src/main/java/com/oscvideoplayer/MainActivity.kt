@@ -361,13 +361,13 @@ class MainActivity : AppCompatActivity() {
                         player?.pause()
                         player?.seekTo(alignmentSeekPos)
                     }
-                    repeat(100) {
+                    for (i in 0 until 100) {
                         delay(50)
                         val pos = player?.currentPosition ?: 0L
                         if (kotlin.math.abs(pos - alignmentSeekPos) < 500 || pos > 0) {
                             alignmentSeeked = true
                             Log.d(TAG, "alignment: seeked pos=" + pos)
-                            return@repeat
+                            break
                         }
                     }
                     if (!alignmentSeeked) Log.w(TAG, "alignment: seek timeout")
