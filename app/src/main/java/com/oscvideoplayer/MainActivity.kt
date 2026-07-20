@@ -355,36 +355,41 @@ class MainActivity : AppCompatActivity() {
         alignmentJob = lifecycleScope.launch {
             while (isActive) {
                 if (!alignmentRendered) { delay(50); continue }
-                // pause + seek after first frame
+                Log.d(TAG, "alignment: rendered")
                 if (!alignmentSeeked) {
                     withContext(Dispatchers.Main) {
                         player?.pause()
                         player?.seekTo(alignmentSeekPos)
                     }
-                    // poll until position changes to near seek target
                     repeat(100) {
                         delay(50)
                         val pos = player?.currentPosition ?: 0L
                         if (kotlin.math.abs(pos - alignmentSeekPos) < 500 || pos > 0) {
                             alignmentSeeked = true
+                            Log.d(TAG, "alignment: seeked pos=" + pos)
                             return@repeat
                         }
                     }
-                    alignmentSeeked = true // timeout fallback
+                    if (!alignmentSeeked) Log.w(TAG, "alignment: seek timeout")
+                    alignmentSeeked = true
                     continue
                 }
-                // wait for future time
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now < alignmentTargetTime) { delay(50); continue }
-                // time reached: play and report
+                Log.d(TAG, "alignment: timeup pos=" + (player?.currentPosition ?: 0L))
                 withContext(Dispatchers.Main) {
-                    player?.play()
-                    delay(200)
-                    val pos = player?.currentPosition ?: 0L
-                    val dur = player?.duration ?: 0L
-                    val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
-                    alignmentReady = true
-                    onReady(pos, durStr)
+                    try {
+                        player?.play()
+                        kotlinx.coroutines.delay(200)
+                        val pos = player?.currentPosition ?: 0L
+                        val dur = player?.duration ?: 0L
+                        val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
+                        alignmentReady = true
+                        Log.d(TAG, "alignment onReady: pos=" + pos + " dur=" + durStr)
+                        onReady(pos, durStr)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "alignment onReady error: " + e.message)
+                    }
                 }
                 break
             }
