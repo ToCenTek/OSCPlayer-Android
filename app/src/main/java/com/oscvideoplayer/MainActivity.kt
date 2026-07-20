@@ -746,8 +746,8 @@ class MainActivity : AppCompatActivity() {
     fun setVideoFrameRate(fps: Double) { videoFrameRate = fps }
     fun getVideoFrameRate(): Double = videoFrameRate
 
-    fun pauseVideo() = runOnUiThread { player?.pause() }
-    fun resumeVideo() = runOnUiThread { player?.play() }
+    fun pauseVideo() = runOnUiThread { player?.pause(); cachedIsPlaying = false }
+    fun resumeVideo() = runOnUiThread { player?.play(); cachedIsPlaying = true }
     fun togglePlayPause() {
         if (cachedIsPlaying) pauseVideo() else resumeVideo()
     }
@@ -755,13 +755,12 @@ class MainActivity : AppCompatActivity() {
     fun togglePause() {
         runOnUiThread {
             val p = player
-            if (p?.isPlaying == true) p.pause() else p?.play()
+            if (p?.isPlaying == true) { p.pause(); cachedIsPlaying = false }
+            else { p?.play(); cachedIsPlaying = true }
         }
     }
 
-    fun isPaused(): Boolean {
-        return !cachedIsPlaying
-    }
+    fun isPaused(): Boolean { return !cachedIsPlaying }
 
     fun stopVideo() {
         runOnUiThread {
@@ -797,9 +796,9 @@ class MainActivity : AppCompatActivity() {
     fun seekToMs(ms: Long) {
         runOnUiThread {
             val p = player ?: return@runOnUiThread
-            val wasPlaying = p.isPlaying
+            cachedIsPlaying = p.isPlaying
             p.seekTo(ms)
-            if (!wasPlaying) p.pause()
+            if (!cachedIsPlaying) p.pause()
         }
     }
 
