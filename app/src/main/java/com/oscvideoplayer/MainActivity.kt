@@ -373,10 +373,10 @@ class MainActivity : AppCompatActivity() {
                 // wait for target time
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now < alignmentTargetTime) { delay(50); continue }
-                // both ready: pause and report
+                // time reached + prep done: play and report
                 withContext(Dispatchers.Main) {
-                    player?.pause()
-                    delay(200) // let pause settle
+                    player?.play()
+                    delay(200) // let play settle
                     val pos = player?.currentPosition ?: 0L
                     val dur = player?.duration ?: 0L
                     val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
