@@ -361,14 +361,17 @@ class MainActivity : AppCompatActivity() {
                         player?.pause()
                         player?.seekTo(alignmentSeekPos)
                     }
+                    // wait for position to stabilize (seek is async)
+                    var stable = 0L
                     for (i in 0 until 100) {
                         delay(50)
                         val pos = player?.currentPosition ?: 0L
-                        if (kotlin.math.abs(pos - alignmentSeekPos) < 500 || pos > 0) {
+                        if (pos == stable && pos > 0) {
                             alignmentSeeked = true
-                            Log.d(TAG, "alignment: seeked pos=" + pos)
+                            Log.d(TAG, "alignment: seeked stable=" + pos)
                             break
                         }
+                        stable = pos
                     }
                     if (!alignmentSeeked) Log.w(TAG, "alignment: seek timeout")
                     alignmentSeeked = true
