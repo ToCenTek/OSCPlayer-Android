@@ -796,9 +796,10 @@ class MainActivity : AppCompatActivity() {
     fun seekToMs(ms: Long) {
         runOnUiThread {
             val p = player ?: return@runOnUiThread
-            cachedIsPlaying = p.isPlaying
+            val playAfter = p.isPlaying
             p.seekTo(ms)
-            if (!cachedIsPlaying) p.pause()
+            if (playAfter) p.play() else p.pause()
+            cachedIsPlaying = playAfter
         }
     }
 
