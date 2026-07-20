@@ -1110,7 +1110,9 @@ class OSCServer(
 
     fun sendHeartbeat(eventName: String, isPaused: Boolean, isStopped: Boolean,
                       fileIndex: Int, fileName: String, positionMs: Long, durationMs: Long) {
-        val client = heartbeatClient ?: return
+        val client = heartbeatClient
+        if (client == null) { Log.d(TAG, "hb skipped: no client"); return }
+        Log.d(TAG, "hb: " + eventName + " " + positionMs + "ms idx=" + fileIndex)
         val msg = OSCMessage("/Heartbeat", listOf(
             if (isPaused) "1" else "0",
             if (isStopped) "1" else "0",

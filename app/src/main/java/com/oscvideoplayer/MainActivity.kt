@@ -338,6 +338,7 @@ class MainActivity : AppCompatActivity() {
     private var alignmentRendered = false
     private var alignmentSeeked = false
     private var alignmentSeekedPos = 0L
+    private var alignmentReported = false
 
     fun alignmentPrepare(index: Int, kfMs: Long, futureMs: Long, onReady: (Long, String) -> Unit) {
         alignmentSeekPos = kfMs
@@ -345,6 +346,7 @@ class MainActivity : AppCompatActivity() {
         alignmentReady = false
         alignmentRendered = false
         alignmentSeeked = false
+        alignmentReported = false
 
         val items = getPlaylistItems()
         val item = items.getOrNull(index) ?: run { onReady(0L, "invalid index"); return }
@@ -378,12 +380,14 @@ class MainActivity : AppCompatActivity() {
                     alignmentSeeked = true
                     continue
                 }
-                // seek done: report alignment ready immediately
-                withContext(Dispatchers.Main) {
-                    val dur = player?.duration ?: 0L
-                    val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
-                    alignmentReady = true
-                    onReady(alignmentSeekedPos, durStr)
+                // seek done: report alignment ready once
+                if (!alignmentReported) {
+                    withContext(Dispatchers.Main) {
+                        val dur = player?.duration ?: 0L
+                        val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
+                        alignmentReported = true
+                        onReady(alignmentSeekedPos, durStr)
+                    }
                 }
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now < alignmentTargetTime) { delay(50); continue }
