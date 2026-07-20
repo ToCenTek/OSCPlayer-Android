@@ -380,7 +380,7 @@ class MainActivity : AppCompatActivity() {
         val pos = p?.currentPosition ?: cachedPosition
         val dur = p?.duration ?: 0L
         val fmt = p?.videoFormat
-        val fps = if (fmt != null && fmt.frameRate > 0) fmt.frameRate.toDouble() else videoFrameRate
+        val fps = if (fmt != null && fmt.frameRate > 0) fmt.frameRate.toFloat() else videoFrameRate.toFloat()
         com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, name, pos, dur, fps)
     }
 
