@@ -1010,8 +1010,7 @@ class OSCServer(
             val targetAddress = InetAddress.getByName(ipStr)
             val packet = DatagramPacket(data, data.size, targetAddress, targetPort)
             Log.d(TAG, "Sending to $ipStr:$targetPort data=${data.size}B")
-            val s = java.net.DatagramSocket(0)
-            try { s.send(packet) } finally { s.close() }
+            Thread { java.net.DatagramSocket(0).use { it.send(packet) } }.start()
             Log.d(TAG, "[SEND] ${msg.address} to $ipStr:$targetPort")
         } catch (e: Exception) {
             Log.e(TAG, "Send error: ${e.message} type=${e.javaClass.simpleName}")
