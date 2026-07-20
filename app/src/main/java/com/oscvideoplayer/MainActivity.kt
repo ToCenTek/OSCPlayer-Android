@@ -379,7 +379,8 @@ class MainActivity : AppCompatActivity() {
         val name = currentVideoPath?.substringAfterLast("/") ?: ""
         val pos = p?.currentPosition ?: cachedPosition
         val dur = p?.duration ?: 0L
-        com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, name, pos, dur, videoFrameRate)
+        val fps = p?.videoFormat?.frameRate?.toDouble() ?: videoFrameRate
+        com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, name, pos, dur, fps)
     }
 
     fun getLocalIPAddress(): String? {
@@ -828,10 +829,10 @@ class MainActivity : AppCompatActivity() {
             // fallback: metadata
             val r = android.media.MediaMetadataRetriever()
             r.setDataSource(path)
-            val fps2 = r.extractMetadata(30)?.toDoubleOrNull() ?: r.extractMetadata(27)?.toDoubleOrNull() ?: 30.0
+            val fps2 = r.extractMetadata(30)?.toDoubleOrNull() ?: r.extractMetadata(27)?.toDoubleOrNull() ?: 0.0
             r.release()
             fps2
-        } catch (_: Exception) { 30.0 }
+        } catch (_: Exception) { 0.0 }
     }
 
     fun setVideoFrameRate(fps: Double) { videoFrameRate = fps }
