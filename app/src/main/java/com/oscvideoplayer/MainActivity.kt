@@ -746,6 +746,8 @@ class MainActivity : AppCompatActivity() {
                     cachedPosition = p.currentPosition
                     cachedIsPlaying = p.isPlaying
                     cachedVolume = p.volume
+                    // periodic heartbeat for sync monitoring
+                    hb("periodic")
                     try {
                         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
                         cachedVolume = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat()
