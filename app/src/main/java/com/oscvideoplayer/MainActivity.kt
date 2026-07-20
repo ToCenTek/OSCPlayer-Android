@@ -405,6 +405,17 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread { player?.play() }
     }
 
+    private fun hb(eventName: String) {
+        val p = player
+        val isPaused = p?.isPlaying == false && p?.playbackState == Player.STATE_READY
+        val isStopped = p?.playbackState == Player.STATE_IDLE
+        val idx = playlistManager.currentItemIndex
+        val name = currentVideoPath?.substringAfterLast("/") ?: ""
+        val pos = p?.currentPosition ?: cachedPosition
+        val dur = p?.duration ?: 0L
+        com.oscvideoplayer.OSCServer.getInstance()?.sendHeartbeat(eventName, isPaused, isStopped, idx, name, pos, dur)
+    }
+
     fun getLocalIPAddress(): String? {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()

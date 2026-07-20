@@ -71,6 +71,7 @@ class OSCServer(
 
     fun getMainActivity(): MainActivity? = mainActivity
     private val clients = mutableMapOf<String, ClientInfo>()
+    private var heartbeatClient: ClientInfo? = null
 
     data class ClientInfo(
         val address: InetAddress,
@@ -112,6 +113,7 @@ class OSCServer(
                         val tag = if (fromMcast) "[MCAST]" else "[UNI]"
                         Log.d(TAG, "$tag from ${packet.address.hostAddress}:${packet.port}")
                         val client = getClient(packet.address, packet.port)
+                        heartbeatClient = client
                         processMessage(packet.data, packet.length, client)
                     } catch (e: Exception) {
                         if (isRunning) Log.e(TAG, "Receive error: ${e.message}")
@@ -1104,4 +1106,19 @@ class OSCServer(
         val address: String,
         val args: List<Any>
     )
+
+    fun sendHeartbeat(eventName: String, isPaused: Boolean, isStopped: Boolean,
+                      fileIndex: Int, fileName: String, positionMs: Long, durationMs: Long) {
+        val client = heartbeatClient ?: return
+        val msg = OSCMessage("/Heartbeat", listOf(
+            if (isPaused) "1" else "0",
+            if (isStopped) "1" else "0",
+            eventName,
+            fileIndex.toString(),
+            fileName,
+            positionMs.toString(),
+            durationMs.toString()
+        ))
+        sendResponse(msg, client)
+    }
 }
