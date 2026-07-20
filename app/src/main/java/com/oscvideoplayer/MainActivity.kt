@@ -338,64 +338,44 @@ class MainActivity : AppCompatActivity() {
     private var alignmentRendered = false
     private var alignmentSeeked = false
     private var alignmentSeekedPos = 0L
-    private var alignmentReported = false
+    private var alignmentOnReady: ((Long, String) -> Unit)? = null
 
     fun alignmentPrepare(index: Int, kfMs: Long, futureMs: Long, onReady: (Long, String) -> Unit) {
         alignmentSeekPos = kfMs
         alignmentTargetTime = android.os.SystemClock.elapsedRealtime() + futureMs
-        alignmentReady = false
         alignmentRendered = false
         alignmentSeeked = false
-        alignmentReported = false
+        alignmentOnReady = onReady
 
         val items = getPlaylistItems()
         val item = items.getOrNull(index) ?: run { onReady(0L, "invalid index"); return }
         val path = item["path"] as? String ?: run { onReady(0L, "no path"); return }
-
         playVideo(path)
+    }
 
-        alignmentJob?.cancel()
-        alignmentJob = lifecycleScope.launch {
-            while (isActive) {
-                if (!alignmentRendered) { delay(50); continue }
-                Log.d(TAG, "alignment: rendered")
-                if (!alignmentSeeked) {
-                    withContext(Dispatchers.Main) {
-                        player?.pause()
-                        player?.seekTo(alignmentSeekPos)
-                    }
-                    // wait for position to stabilize (seek is async)
-                    var stable = 0L
-                    for (i in 0 until 100) {
-                        delay(50)
-                        val pos = player?.currentPosition ?: 0L
-                        if (pos == stable && pos > 0) {
-                            alignmentSeeked = true
-                            Log.d(TAG, "alignment: seeked stable=" + pos)
-                            break
-                        }
-                        stable = pos
-                    }
-                    if (!alignmentSeeked) Log.w(TAG, "alignment: seek timeout")
-                    alignmentSeeked = true
-                    continue
-                }
-                // seek done: report alignment ready once
-                if (!alignmentReported) {
-                    withContext(Dispatchers.Main) {
-                        val dur = player?.duration ?: 0L
-                        val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
-                        alignmentReported = true
-                        onReady(alignmentSeekedPos, durStr)
-                    }
-                }
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (now < alignmentTargetTime) { delay(50); continue }
-                withContext(Dispatchers.Main) {
-                    try { player?.play() } catch (_: Exception) {}
-                }
-                break
-            }
+    private fun onAlignmentRendered() {
+        if (alignmentOnReady == null) return
+        alignmentRendered = true
+        player?.pause()
+        player?.seekTo(alignmentSeekPos)
+    }
+
+    private fun onAlignmentSeeked(posMs: Long) {
+        val cb = alignmentOnReady ?: return
+        alignmentSeeked = true
+        alignmentSeekedPos = posMs
+        val dur = player?.duration ?: 0L
+        val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
+        cb(posMs, durStr)
+        val delayMs = alignmentTargetTime - android.os.SystemClock.elapsedRealtime()
+        if (delayMs > 0) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                player?.play()
+                alignmentOnReady = null
+            }, delayMs)
+        } else {
+            player?.play()
+            alignmentOnReady = null
         }
     }
 
