@@ -334,15 +334,13 @@ class MainActivity : AppCompatActivity() {
     // --- Alignment ---
     private var alignmentTargetTime = 0L
     private var alignmentSeekPos = 0L
-    private var alignmentReady = false
     private var alignmentRendered = false
     private var alignmentSeeked = false
     private var alignmentSeekedPos = 0L
     private var alignmentOnReady: ((Long, String) -> Unit)? = null
 
-    fun alignmentPrepare(index: Int, kfMs: Long, futureMs: Long, onReady: (Long, String) -> Unit) {
+    fun alignmentPrepare(index: Int, kfMs: Long, onReady: (Long, String) -> Unit) {
         alignmentSeekPos = kfMs
-        alignmentTargetTime = android.os.SystemClock.elapsedRealtime() + futureMs
         alignmentRendered = false
         alignmentSeeked = false
         alignmentOnReady = onReady
@@ -368,20 +366,10 @@ class MainActivity : AppCompatActivity() {
         val dur = player?.duration ?: 0L
         val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
         cb(posMs, durStr)
-        val delayMs = alignmentTargetTime - android.os.SystemClock.elapsedRealtime()
-        if (delayMs > 0) {
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                player?.play()
-                alignmentOnReady = null
-            }, delayMs)
-        } else {
-            player?.play()
-            alignmentOnReady = null
-        }
     }
 
     fun alignmentPlay() {
-        alignmentJob?.cancel()
+        alignmentOnReady = null
         runOnUiThread { player?.play() }
     }
 

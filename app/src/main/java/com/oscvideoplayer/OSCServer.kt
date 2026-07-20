@@ -272,9 +272,7 @@ class OSCServer(
                             ?: parts.getOrNull(2)?.toIntOrNull() ?: 0
                         val kfMs = (msg.args.getOrNull(1) as? Number)?.toLong()
                             ?: parts.getOrNull(3)?.toLongOrNull() ?: 0L
-                        val futureMs = (msg.args.getOrNull(2) as? Number)?.toLong()
-                            ?: parts.getOrNull(4)?.toLongOrNull() ?: 2000L
-                        mainActivity?.alignmentPrepare(idx, kfMs, futureMs) { posMs, durStr ->
+                        mainActivity?.alignmentPrepare(idx, kfMs) { posMs, durStr ->
                             sendResponse(OSCMessage("/Alignment/ready", listOf(
                                 idx.toString(),
                                 mainActivity?.getPlaylistItems()?.getOrNull(idx)?.get("name") as? String ?: "",
@@ -284,9 +282,9 @@ class OSCServer(
                         }
                         return
                     }
-                    "play" -> {
+                    "go" -> {
                         mainActivity?.alignmentPlay()
-                        response = OSCMessage("/Alignment", listOf("play"))
+                        response = OSCMessage("/Alignment", listOf("go"))
                     }
                     else -> response = OSCMessage("/Error", listOf("Unknown alignment command"))
                 }
