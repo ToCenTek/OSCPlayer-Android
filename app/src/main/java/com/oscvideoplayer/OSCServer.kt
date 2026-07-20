@@ -71,6 +71,7 @@ class OSCServer(
 
     fun getMainActivity(): MainActivity? = mainActivity
     private val clients = mutableMapOf<String, ClientInfo>()
+    @Volatile
     private var heartbeatClient: ClientInfo? = null
 
     data class ClientInfo(

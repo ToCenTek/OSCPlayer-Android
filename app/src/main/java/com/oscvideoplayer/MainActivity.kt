@@ -378,22 +378,17 @@ class MainActivity : AppCompatActivity() {
                     alignmentSeeked = true
                     continue
                 }
+                // seek done: report alignment ready immediately
+                withContext(Dispatchers.Main) {
+                    val dur = player?.duration ?: 0L
+                    val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
+                    alignmentReady = true
+                    onReady(alignmentSeekedPos, durStr)
+                }
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now < alignmentTargetTime) { delay(50); continue }
-                Log.d(TAG, "alignment: timeup pos=" + (player?.currentPosition ?: 0L))
                 withContext(Dispatchers.Main) {
-                    try {
-                        player?.play()
-                        kotlinx.coroutines.delay(200)
-                        val pos = alignmentSeekedPos
-                        val dur = player?.duration ?: 0L
-                        val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
-                        alignmentReady = true
-                        Log.d(TAG, "alignment onReady: pos=" + pos + " dur=" + durStr)
-                        onReady(pos, durStr)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "alignment onReady error: " + e.message)
-                    }
+                    try { player?.play() } catch (_: Exception) {}
                 }
                 break
             }
