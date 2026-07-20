@@ -622,10 +622,14 @@ class MainActivity : AppCompatActivity() {
                              newPosition: androidx.media3.common.Player.PositionInfo,
                              reason: Int
                          ) {
-                             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                                 alignmentSeeked = true
-                                 alignmentSeekedPos = newPosition.positionMs
-                             }
+                              if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                                  alignmentSeeked = true
+                                  alignmentSeekedPos = newPosition.positionMs
+                                  val actual = player?.currentPosition ?: 0L
+                                  if (alignmentSeekedPos != actual) {
+                                      Log.d(TAG, "seek event pos=" + alignmentSeekedPos + " actual=" + actual)
+                                  }
+                              }
                          }
                      })
                 }
