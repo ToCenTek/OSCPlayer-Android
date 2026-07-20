@@ -245,6 +245,31 @@ class OSCServer(
                 response = OSCMessage("/Discover", listOf(ip, mac))
             }
 
+            "alignment" -> {
+                val sub = parts.getOrNull(1) ?: ""
+                when (sub) {
+                    "prepare" -> {
+                        val idx = (msg.args.getOrNull(0) as? Number)?.toInt() ?: 0
+                        val kfMs = (msg.args.getOrNull(1) as? Number)?.toLong() ?: 0L
+                        val futureMs = (msg.args.getOrNull(2) as? Number)?.toLong() ?: 2000L
+                        mainActivity?.alignmentPrepare(idx, kfMs, futureMs) { posMs, durStr ->
+                            sendResponse(OSCMessage("/Alignment/ready", listOf(
+                                idx.toString(),
+                                mainActivity?.getPlaylistItems()?.getOrNull(idx)?.get("name") as? String ?: "",
+                                posMs.toString(),
+                                durStr
+                            )), client)
+                        }
+                        return
+                    }
+                    "play" -> {
+                        mainActivity?.alignmentPlay()
+                        response = OSCMessage("/Alignment", listOf("play"))
+                    }
+                    else -> response = OSCMessage("/Error", listOf("Unknown alignment command"))
+                }
+            }
+
             "getgop" -> {
                 val name = if (parts.size > 1) parts.subList(1, parts.size).joinToString("/") else ""
                          ?: (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: ""

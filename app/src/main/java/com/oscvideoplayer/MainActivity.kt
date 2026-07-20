@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity() {
     private var powerOffTime: String? = null
     private var powerShutdownTime: String? = null
     private var powerRebootTime: String? = null
+    private var alignmentJob: kotlinx.coroutines.Job? = null
 
     companion object {
         private const val TAG = "MainActivity"
@@ -330,6 +331,68 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { null }
     }
 
+    // --- Alignment ---
+    private var alignmentTargetTime = 0L
+    private var alignmentSeekPos = 0L
+    private var alignmentReady = false
+    private var alignmentRendered = false
+    private var alignmentSeeked = false
+
+    fun alignmentPrepare(index: Int, kfMs: Long, futureMs: Long, onReady: (Long, String) -> Unit) {
+        alignmentSeekPos = kfMs
+        alignmentTargetTime = android.os.SystemClock.elapsedRealtime() + futureMs
+        alignmentReady = false
+        alignmentRendered = false
+        alignmentSeeked = false
+
+        // get video path by index
+        val items = getPlaylistItems()
+        val item = items.getOrNull(index) ?: run { onReady(0L, "invalid index"); return }
+        val path = item["path"] as? String ?: run { onReady(0L, "no path"); return }
+
+        // start playing
+        playVideo(path)
+
+        // monitor events and take actions
+        alignmentJob?.cancel()
+        alignmentJob = lifecycleScope.launch {
+            while (isActive) {
+                // wait for rendered first frame
+                if (!alignmentRendered) { delay(100); continue }
+                // seek to keyframe and wait for position to change
+                if (!alignmentSeeked) {
+                    withContext(Dispatchers.Main) {
+                        player?.seekTo(alignmentSeekPos)
+                        delay(50)
+                        alignmentSeeked = (player?.currentPosition ?: 0L) > 0 ||
+                            kotlin.math.abs((player?.currentPosition ?: 0L) - alignmentSeekPos) < 500
+                    }
+                    delay(100)
+                    continue
+                }
+                // wait for target time
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now < alignmentTargetTime) { delay(50); continue }
+                // both ready: pause and report
+                withContext(Dispatchers.Main) {
+                    player?.pause()
+                    delay(200) // let pause settle
+                    val pos = player?.currentPosition ?: 0L
+                    val dur = player?.duration ?: 0L
+                    val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
+                    alignmentReady = true
+                    onReady(pos, durStr)
+                }
+                break
+            }
+        }
+    }
+
+    fun alignmentPlay() {
+        alignmentJob?.cancel()
+        runOnUiThread { player?.play() }
+    }
+
     fun getLocalIPAddress(): String? {
         try {
             val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
@@ -534,10 +597,14 @@ class MainActivity : AppCompatActivity() {
                             playbackSpeed = parms.speed
                         }
 
-                        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-                            Log.d(TAG, "VideoSize: ${videoSize.width}x${videoSize.height} unapplied=${videoSize.unappliedRotationDegrees}")
-                        }
-                    })
+                         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                             Log.d(TAG, "VideoSize: ${videoSize.width}x${videoSize.height} unapplied=${videoSize.unappliedRotationDegrees}")
+                         }
+
+                         override fun onRenderedFirstFrame() {
+                             alignmentRendered = true
+                         }
+                     })
                 }
             playerView?.player = player
             startWatchdog()
