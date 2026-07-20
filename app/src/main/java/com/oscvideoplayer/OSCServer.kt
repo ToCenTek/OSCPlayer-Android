@@ -1114,13 +1114,13 @@ class OSCServer(
         if (client == null) { Log.d(TAG, "hb skipped: no client"); return }
         Log.d(TAG, "hb: " + eventName + " " + positionMs + "ms idx=" + fileIndex)
         val msg = OSCMessage("/Heartbeat", listOf(
-            if (isPaused) "1" else "0",
-            if (isStopped) "1" else "0",
+            if (isPaused) 1 else 0,
+            if (isStopped) 1 else 0,
             eventName,
-            fileIndex.toString(),
+            fileIndex,
             fileName,
-            positionMs.toString(),
-            durationMs.toString()
+            positionMs.toInt(),
+            durationMs.toInt()
         ))
         sendResponse(msg, client)
     }
