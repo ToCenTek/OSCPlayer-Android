@@ -615,6 +615,12 @@ class MainActivity : AppCompatActivity() {
                          override fun onRenderedFirstFrame() {
                              alignmentRendered = true
                          }
+
+                         override fun onPositionDiscontinuity(reason: Int) {
+                             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                                 alignmentSeeked = true
+                             }
+                         }
                      })
                 }
             playerView?.player = player
