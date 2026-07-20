@@ -354,6 +354,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onAlignmentRendered() {
+        Log.d(TAG, "onAlignmentRendered: cb=" + (alignmentOnReady != null))
         if (alignmentOnReady == null) return
         alignmentRendered = true
         player?.pause()
@@ -603,23 +604,29 @@ class MainActivity : AppCompatActivity() {
                              Log.d(TAG, "VideoSize: ${videoSize.width}x${videoSize.height} unapplied=${videoSize.unappliedRotationDegrees}")
                          }
 
-                         override fun onRenderedFirstFrame() {
-                             alignmentRendered = true
-                         }
+                          override fun onRenderedFirstFrame() {
+                              onAlignmentRendered()
+                              hb("onRenderedFirstFrame")
+                          }
 
                          override fun onPositionDiscontinuity(
                              oldPosition: androidx.media3.common.Player.PositionInfo,
                              newPosition: androidx.media3.common.Player.PositionInfo,
                              reason: Int
-                         ) {
-                              if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                                  alignmentSeeked = true
-                                  alignmentSeekedPos = newPosition.positionMs
-                                  val actual = player?.currentPosition ?: 0L
-                                  if (alignmentSeekedPos != actual) {
-                                      Log.d(TAG, "seek event pos=" + alignmentSeekedPos + " actual=" + actual)
-                                  }
-                              }
+                          ) {
+                               if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                                   onAlignmentSeeked(newPosition.positionMs)
+                               }
+                               val reasonStr = when (reason) {
+                                   Player.DISCONTINUITY_REASON_SEEK -> "onPositionDiscontinuity(SEEK)"
+                                   Player.DISCONTINUITY_REASON_AUTO_TRANSITION -> "onPositionDiscontinuity(AUTO)"
+                                   Player.DISCONTINUITY_REASON_SKIP -> "onPositionDiscontinuity(SKIP)"
+                                   Player.DISCONTINUITY_REASON_REMOVE -> "onPositionDiscontinuity(REMOVE)"
+                                   Player.DISCONTINUITY_REASON_INTERNAL -> "onPositionDiscontinuity(INTERNAL)"
+                                   Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT -> "onPositionDiscontinuity(SEEK_ADJ)"
+                                   else -> "onPositionDiscontinuity($reason)"
+                               }
+                               hb(reasonStr)
                          }
                      })
                 }
