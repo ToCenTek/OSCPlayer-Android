@@ -426,6 +426,8 @@ class OSCServer(
                         } else response = OSCMessage("/PlaylistMode", listOf(mainActivity?.getPlaylistMode() ?: "all"))
                     }
                     "get" -> {
+                        // send wait message first
+                        sendResponse(OSCMessage("/Playlist", listOf("Parsing keyframes, Please wait......")), client)
                         val items = mainActivity?.getPlaylistItems() ?: emptyList()
                         val lines = mutableListOf<String>()
                         for ((i, it) in items.withIndex()) {
