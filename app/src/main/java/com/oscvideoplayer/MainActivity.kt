@@ -320,14 +320,13 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
             extractor.release()
-            if (kfTimes.size < 2) return null
-            val secondKf = kfTimes[1]
-            if (secondKf <= 0) return null
+            if (kfTimes.size < 1) return null
+            val firstKf = kfTimes[0]
+            if (firstKf <= 0) return null
             // filter out trailing zero timestamps (Amlogic platform bug)
             while (kfTimes.size > 1 && kfTimes.last() == 0L) kfTimes.removeAt(kfTimes.lastIndex)
             val lastKf = kfTimes.last()
-            if (secondKf <= 0) return null
-            Triple(secondKf, lastKf, fps)
+            Triple(firstKf, lastKf, fps)
         } catch (_: Exception) { null }
     }
 
