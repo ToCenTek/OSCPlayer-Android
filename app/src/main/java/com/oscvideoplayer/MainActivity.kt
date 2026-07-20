@@ -300,35 +300,18 @@ class MainActivity : AppCompatActivity() {
             extractor.selectTrack(videoTrack)
             val format = extractor.getTrackFormat(videoTrack)
             var fps = try { if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE)) format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() else 0.0 } catch (_: Exception) { 0.0 }
-            if (fps <= 0.0) {
-                try {
-                    val r = android.media.MediaMetadataRetriever()
-                    r.setDataSource(path)
-                    fps = r.extractMetadata(30)?.toDoubleOrNull() ?: 0.0
-                    r.release()
-                } catch (_: Exception) {}
-            }
+            if (fps <= 0.0) fps = getFrameRate(path)
             var kfTimes = mutableListOf<Long>()
             var sampleCount = 0
-            var firstFrameTime = -1L
-            var secondFrameTime = -1L
-            // scan ALL frames to find keyframes, also compute fps from frame durations
             while (extractor.advance()) {
                 sampleCount++
                 try {
                     val flags = extractor.sampleFlags
                     val time = extractor.sampleTime
-                    if (firstFrameTime < 0) firstFrameTime = time
-                    else if (secondFrameTime < 0) secondFrameTime = time
                     if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
                         kfTimes.add(time / 1000)
                     }
                 } catch (_: Exception) {}
-            }
-            // compute fps from first two frame timestamps if metadata failed
-            if (fps <= 0.0 && firstFrameTime > 0 && secondFrameTime > firstFrameTime) {
-                val frameDurUs = secondFrameTime - firstFrameTime
-                if (frameDurUs > 0) fps = 1_000_000.0 / frameDurUs
             }
             extractor.release()
             if (kfTimes.size < 1) return null
@@ -829,14 +812,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun getFrameRate(path: String): Double {
         return try {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(path)
-            val fps = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
-            retriever.release()
-            fps?.toDoubleOrNull() ?: 30.0
-        } catch (e: Exception) {
-            30.0
-        }
+            val extractor = android.media.MediaExtractor()
+            extractor.setDataSource(path)
+            val track = (0 until extractor.trackCount).firstOrNull { i ->
+                try { extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true } catch (_: Exception) { false }
+            }
+            val fps = if (track != null) {
+                val fmt = extractor.getTrackFormat(track)
+                if (fmt.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
+                    try { fmt.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() } catch (_: Exception) { 0.0 }
+                else 0.0
+            } else 0.0
+            extractor.release()
+            if (fps > 0.0) return fps
+            // fallback: metadata
+            val r = android.media.MediaMetadataRetriever()
+            r.setDataSource(path)
+            val fps2 = r.extractMetadata(30)?.toDoubleOrNull() ?: r.extractMetadata(27)?.toDoubleOrNull() ?: 30.0
+            r.release()
+            fps2
+        } catch (_: Exception) { 30.0 }
     }
 
     fun setVideoFrameRate(fps: Double) { videoFrameRate = fps }
