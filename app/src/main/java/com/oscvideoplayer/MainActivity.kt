@@ -85,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     private var powerShutdownTime: String? = null
     private var powerRebootTime: String? = null
     private var alignmentJob: kotlinx.coroutines.Job? = null
+    private var speedRecoveryJob: kotlinx.coroutines.Job? = null
 
     companion object {
         private const val TAG = "MainActivity"
@@ -340,6 +341,12 @@ class MainActivity : AppCompatActivity() {
     private var alignmentOnReady: ((Long, String) -> Unit)? = null
 
     fun alignmentPrepare(index: Int, kfMs: Long, onReady: (Long, String) -> Unit) {
+        // reset speed tracking
+        speedRecoveryJob?.cancel()
+        if (playbackSpeed != 1.0f) {
+            playbackSpeed = 1.0f
+            runOnUiThread { player?.setPlaybackSpeed(1.0f) }
+        }
         alignmentSeekPos = kfMs
         alignmentRendered = false
         alignmentSeeked = false
@@ -936,9 +943,19 @@ class MainActivity : AppCompatActivity() {
 
     fun isDebugOverlayOn() = debugOverlayEnabled
 
-    fun setPlaybackSpeed(speed: Float) {
+    fun setPlaybackSpeed(speed: Float, autoRecoverMs: Long = 0L) {
+        speedRecoveryJob?.cancel()
         playbackSpeed = speed.coerceIn(0.25f, 4.0f)
         runOnUiThread { player?.setPlaybackSpeed(playbackSpeed) }
+        if (autoRecoverMs > 0 && speed != 1.0f) {
+            speedRecoveryJob = lifecycleScope.launch {
+                delay(autoRecoverMs)
+                if (playbackSpeed != 1.0f) {
+                    playbackSpeed = 1.0f
+                    player?.setPlaybackSpeed(1.0f)
+                }
+            }
+        }
     }
 
     fun getPlaybackSpeed(): Float = playbackSpeed

@@ -366,16 +366,27 @@ class OSCServer(
             }
 
             "speed" -> {
-                var speed = if (parts.size > 1) parts[1].toFloatOrNull() else null
-                if (speed == null && msg.args.isNotEmpty()) {
-                    speed = (msg.args[0] as? Number)?.toFloat()
-                }
-                if (speed != null) {
-                    speed = speed.coerceIn(0.25f, 4.0f)
-                    mainActivity?.setPlaybackSpeed(speed)
-                    response = OSCMessage("/Speed", listOf(speed.toDouble()))
-                } else {
-                    response = OSCMessage("/Speed", listOf(mainActivity?.getPlaybackSpeed() ?: 1.0))
+                val sub = parts.getOrNull(1) ?: ""
+                when (sub) {
+                    "adjust" -> {
+                        val s = (msg.args.getOrNull(0) as? Number)?.toFloat()
+                            ?: parts.getOrNull(2)?.toFloatOrNull() ?: 1.0f
+                        val ms = (msg.args.getOrNull(1) as? Number)?.toLong()
+                            ?: parts.getOrNull(3)?.toLongOrNull() ?: 3000L
+                        mainActivity?.setPlaybackSpeed(s.coerceIn(0.25f, 4.0f), ms)
+                        response = OSCMessage("/Speed", listOf(s.toDouble(), ms.toDouble()))
+                    }
+                    else -> {
+                        var speed = if (sub.isNotEmpty()) sub.toFloatOrNull()
+                                   else (msg.args.getOrNull(0) as? Number)?.toFloat()
+                        if (speed != null) {
+                            speed = speed.coerceIn(0.25f, 4.0f)
+                            mainActivity?.setPlaybackSpeed(speed)
+                            response = OSCMessage("/Speed", listOf(speed.toDouble()))
+                        } else {
+                            response = OSCMessage("/Speed", listOf(mainActivity?.getPlaybackSpeed() ?: 1.0))
+                        }
+                    }
                 }
             }
 
