@@ -1023,7 +1023,7 @@ class OSCServer(
             if (ipStr.startsWith("/")) ipStr = ipStr.substring(1)
             val targetAddress = InetAddress.getByName(ipStr)
             val packet = DatagramPacket(data, data.size, targetAddress, targetPort)
-            Log.d(TAG, "Sending to $ipStr:$targetPort data=${data.size}B")
+            Log.d(TAG, "Sending to $ipStr:$targetPort data=${data.size}B hex=" + data.joinToString("") { "%02x".format(it) })
             Thread { java.net.DatagramSocket(0).use { it.send(packet) } }.start()
             Log.d(TAG, "[SEND] ${msg.address} to $ipStr:$targetPort")
         } catch (e: Exception) {
