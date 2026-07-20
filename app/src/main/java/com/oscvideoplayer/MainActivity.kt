@@ -337,6 +337,7 @@ class MainActivity : AppCompatActivity() {
     private var alignmentReady = false
     private var alignmentRendered = false
     private var alignmentSeeked = false
+    private var alignmentSeekedPos = 0L
 
     fun alignmentPrepare(index: Int, kfMs: Long, futureMs: Long, onReady: (Long, String) -> Unit) {
         alignmentSeekPos = kfMs
@@ -384,7 +385,7 @@ class MainActivity : AppCompatActivity() {
                     try {
                         player?.play()
                         kotlinx.coroutines.delay(200)
-                        val pos = player?.currentPosition ?: 0L
+                        val pos = alignmentSeekedPos
                         val dur = player?.duration ?: 0L
                         val durStr = String.format("%02d:%02d.%03d", dur / 60000, (dur % 60000) / 1000, dur % 1000)
                         alignmentReady = true
@@ -616,9 +617,14 @@ class MainActivity : AppCompatActivity() {
                              alignmentRendered = true
                          }
 
-                         override fun onPositionDiscontinuity(reason: Int) {
+                         override fun onPositionDiscontinuity(
+                             oldPosition: androidx.media3.common.Player.PositionInfo,
+                             newPosition: androidx.media3.common.Player.PositionInfo,
+                             reason: Int
+                         ) {
                              if (reason == Player.DISCONTINUITY_REASON_SEEK) {
                                  alignmentSeeked = true
+                                 alignmentSeekedPos = newPosition.positionMs
                              }
                          }
                      })
