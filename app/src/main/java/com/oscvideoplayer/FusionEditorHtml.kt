@@ -33,7 +33,7 @@ body{background:#0d0d1a;color:#d0d0d0;font-family:system-ui,sans-serif;overflow:
 <body>
 <div class="header"><h1>网格校正</h1><span style="font-size:10px;color:#556" id="fpsDisplay"></span></div>
 <div class="toolbar">
-<button id="btnEnable" onclick="toggle()">开启</button>
+<label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none"><input type="checkbox" id="cbEnable" checked onchange="toggle()"> <span id="lblEnable">网格校正</span></label>
 <div class="sep"></div>
 <label>X <button onclick="subdiv(-1,0)">−</button><span id="subdivX">0</span><button onclick="subdiv(1,0)">+</button></label>
 <label>Y <button onclick="subdiv(0,-1)">−</button><span id="subdivY">0</span><button onclick="subdiv(0,1)">+</button></label>
@@ -66,8 +66,7 @@ async function api(p,o){return await(await fetch(p,o||{})).json()}
 async function load(){
   try{
     const s=await api('/fusion/api/state')
-    en=s.enabled; document.getElementById('btnEnable').textContent=en?'关闭':'开启'
-    document.getElementById('btnEnable').className=en?'active':''
+    en=s.enabled; document.getElementById('cbEnable').checked=en
     if(s.mesh){
       if(!mesh||s.mesh.cols!==mesh.cols||s.mesh.rows!==mesh.rows){
         mesh=s.mesh; cr=Math.min(cr,mesh.rows-1); cc=Math.min(cc,mesh.cols-1)
@@ -276,7 +275,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='r'&&!e.ctrlKey&&!e.metaKey)regularize()
 })
 
-async function toggle(){const s=await api('/fusion/api/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enable:!en})});en=s.enabled;document.getElementById('btnEnable').textContent=en?'关闭':'开启';document.getElementById('btnEnable').className=en?'active':''}
+async function toggle(){const cb=document.getElementById('cbEnable');const s=await api('/fusion/api/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enable:cb.checked})});en=s.enabled;cb.checked=en}
 async function regularize(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'regularize'})});mesh=r;draw()}
 async function resetMesh(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset'})});mesh=r;sel.clear();cr=1;cc=1;document.getElementById('subdivX').textContent='0';document.getElementById('subdivY').textContent='0';draw()}
 function resetSource(){src={x:0,y:0,w:1,h:1};draw()}

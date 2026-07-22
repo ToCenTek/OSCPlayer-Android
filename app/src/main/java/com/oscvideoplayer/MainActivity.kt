@@ -157,13 +157,23 @@ class MainActivity : AppCompatActivity() {
         fusionRenderer = FusionRenderer(
             meshProvider = { fusionMesh },
             onSurfaceCreated = { _ ->
-                // GL surface ready; player will pick it up in initializePlayer()
+                // GL surface ready; connect player if available
+                runOnUiThread {
+                    val p = player
+                    val r = fusionRenderer
+                    if (p != null && r?.surfaceReady == true) {
+                        playerView?.player = null
+                        playerView?.visibility = android.view.View.GONE
+                        p.setVideoSurface(r.videoSurface)
+                        Log.d(TAG, "GL surface connected to player (late)")
+                    }
+                }
             }
         )
         fusionRenderer?.glSurfaceView = fusionGLView
         fusionGLView?.setEGLContextClientVersion(2)
         fusionGLView?.setRenderer(fusionRenderer)
-        fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY
+        fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
 
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
@@ -209,11 +219,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun inflatePlayerView() {
         val container = findViewById<android.widget.FrameLayout>(com.oscvideoplayer.R.id.playerContainer) ?: return
-        val useSurface = prefs?.getBoolean(KEY_SURFACE_MODE, true) ?: true
-        val layoutRes = if (useSurface) com.oscvideoplayer.R.layout.player_view_surface
-                       else com.oscvideoplayer.R.layout.player_view_texture
         container.removeAllViews()
-        android.view.LayoutInflater.from(this).inflate(layoutRes, container, true)
+        android.view.LayoutInflater.from(this).inflate(
+            com.oscvideoplayer.R.layout.player_view_surface, container, true)
     }
 
     private fun startApp(playVideoPath: String? = null) {
@@ -602,10 +610,16 @@ class MainActivity : AppCompatActivity() {
                          }
                      })
                 }
-            playerView?.player = player
-            // Use GL surface for video if fusion renderer is ready
+            // PlayerView displays controls/buffering; video rendered via GL surface
             if (fusionRenderer?.surfaceReady == true) {
+                playerView?.player = null
+                playerView?.visibility = android.view.View.GONE
                 player?.setVideoSurface(fusionRenderer?.videoSurface)
+                Log.d(TAG, "Video surface set to GL")
+            } else {
+                playerView?.player = player
+                playerView?.visibility = android.view.View.VISIBLE
+                Log.d(TAG, "Video surface set to PlayerView (GL not ready)")
             }
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
@@ -672,41 +686,32 @@ class MainActivity : AppCompatActivity() {
                     val m = fusionMesh ?: return@HttpUploadServer null
                     object : HttpUploadServer.FusionAPI {
                         override fun getJson() = m.toJson().toString()
-                        override fun setPoint(row: Int, col: Int, x: Float, y: Float) { m.setPoint(row, col, x, y) }
-                        override fun resize(cols: Int, rows: Int) { m.resize(cols, rows) }
-                        override fun setSubdiv(sx: Int, sy: Int) { m.setSubdiv(sx, sy) }
-                        override fun regularize() { m.regularize() }
-                        override fun reset() { m.reset() }
+                        override fun setPoint(row: Int, col: Int, x: Float, y: Float) {
+                            m.setPoint(row, col, x, y)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun resize(cols: Int, rows: Int) {
+                            m.resize(cols, rows)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun setSubdiv(sx: Int, sy: Int) {
+                            m.setSubdiv(sx, sy)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun regularize() {
+                            m.regularize()
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun reset() {
+                            m.reset()
+                            fusionRenderer?.markMeshDirty()
+                        }
                         override fun enable(on: Boolean) {
                             Log.d(TAG, "Fusion enable=$on")
                             _fusionEnabled = on
-                            val p = player ?: return
-                            runOnUiThread {
-                                if (on) {
-                                    fusionGLView?.visibility = android.view.View.VISIBLE
-                                    fusionGLView?.postDelayed({
-                                        val r = fusionRenderer ?: return@postDelayed
-                                        if (!r.surfaceReady) return@postDelayed
-                                        val surf = r.videoSurface ?: return@postDelayed
-                                        playerView?.player = null
-                                        playerView?.visibility = android.view.View.GONE
-                                        p.stop()
-                                        p.setVideoSurface(surf)
-                                        p.prepare()
-                                        p.seekTo(cachedPosition.coerceAtLeast(0))
-                                        p.play()
-                                    }, 300)
-                                } else {
-                                    fusionGLView?.visibility = android.view.View.GONE
-                                    p.stop()
-                                    p.setVideoSurface(null)
-                                    playerView?.visibility = android.view.View.VISIBLE
-                                    playerView?.player = p
-                                    p.prepare()
-                                    p.seekTo(cachedPosition)
-                                    p.play()
-                                }
-                            }
+                            // Always use GL rendering; toggle controls mesh warp
+                            // enable(true) = mesh applied, enable(false) = identity mesh
+                            fusionRenderer?.markMeshDirty()
                         }
                         private var _fusionEnabled = false
                         override fun isEnabled() = _fusionEnabled

@@ -4,6 +4,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLES20
 import android.opengl.GLES11Ext
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import android.util.Log
 import android.view.Surface
 import java.nio.ByteBuffer
@@ -17,8 +18,6 @@ class FusionRenderer(
     private val onSurfaceCreated: (SurfaceTexture) -> Unit
 ) : GLSurfaceView.Renderer, SurfaceTexture.OnFrameAvailableListener {
 
-    var glSurfaceView: android.opengl.GLSurfaceView? = null
-
     companion object {
         private const val TAG = "FusionRenderer"
         private const val VSH = """
@@ -31,22 +30,12 @@ void main() {
 }
 """
         private const val FSH = """
+#extension GL_OES_EGL_image_external : require
 precision mediump float;
 varying vec2 vUV;
-uniform sampler2D uTex;
-uniform sampler2D uMesh;
-uniform vec2 uMeshSize;
+uniform samplerExternalOES uTex;
 void main() {
-    vec2 uv = vUV;
-    vec2 cell = uv * (uMeshSize - 1.0);
-    vec2 f = fract(cell);
-    vec2 c = floor(cell) / max(uMeshSize - 1.0, 1.0);
-    vec2 c1 = (floor(cell) + 1.0) / max(uMeshSize - 1.0, 1.0);
-    float wx = mix(mix(texture2D(uMesh, vec2(c.x, c.y)).r, texture2D(uMesh, vec2(c1.x, c.y)).r, f.x),
-                   mix(texture2D(uMesh, vec2(c.x, c1.y)).r, texture2D(uMesh, vec2(c1.x, c1.y)).r, f.x), f.y);
-    float wy = mix(mix(texture2D(uMesh, vec2(c.x, c.y)).g, texture2D(uMesh, vec2(c1.x, c.y)).g, f.x),
-                   mix(texture2D(uMesh, vec2(c.x, c1.y)).g, texture2D(uMesh, vec2(c1.x, c1.y)).g, f.x), f.y);
-    gl_FragColor = texture2D(uTex, vec2(wx, wy));
+    gl_FragColor = texture2D(uTex, vUV);
 }
 """
     }
@@ -55,36 +44,24 @@ void main() {
     private var aPosLoc = 0
     private var aUVLoc = 0
     private var uTexLoc = 0
-    private var uMeshLoc = 0
-    private var uMeshSizeLoc = 0
 
     private var surfaceTexture: SurfaceTexture? = null
     private var surfaceTextureId = 0
     private var frameAvailable = false
-    private var meshTexId = 0
-    private var meshNeedsUpload = true
-    private var lastMeshSig = 0
+    private var frameCount = 0
     @Volatile var surfaceReady: Boolean = false
         private set
-    @Volatile private var surfaceObj: android.view.Surface? = null
+    private var surfaceObj: Surface? = null
+    val videoSurface: Surface? get() = surfaceObj
 
-    val videoSurface: android.view.Surface?
-        get() = surfaceObj
+    // Vertex buffer for mesh cells (max 65x65 grid = 64*64*6 = 24576 vertices)
+    private val MAX_VERTS = 66 * 66 * 6
+    private var vertBuffer: FloatBuffer = ByteBuffer.allocateDirect(MAX_VERTS * 4 * 4)
+        .order(ByteOrder.nativeOrder()).asFloatBuffer()
+    private var vertCount = 0
+    private var lastMeshSig = 0L
 
-    private val quad: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
-        .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
-            put(floatArrayOf(
-                -1f, -1f, 0f, 0f,
-                 1f, -1f, 1f, 0f,
-                -1f,  1f, 0f, 1f,
-                 1f,  1f, 1f, 1f
-            ))
-            position(0)
-        }
-
-    private val stMatrix = FloatArray(16)
-    val surface: Surface?
-        get() = surfaceTexture?.let { Surface(it) }
+    var glSurfaceView: GLSurfaceView? = null
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -92,10 +69,7 @@ void main() {
         aPosLoc = GLES20.glGetAttribLocation(program, "aPos")
         aUVLoc = GLES20.glGetAttribLocation(program, "aUV")
         uTexLoc = GLES20.glGetUniformLocation(program, "uTex")
-        uMeshLoc = GLES20.glGetUniformLocation(program, "uMesh")
-        uMeshSizeLoc = GLES20.glGetUniformLocation(program, "uMeshSize")
 
-        // Create source texture for SurfaceTexture
         val texIds = IntArray(1)
         GLES20.glGenTextures(1, texIds, 0)
         surfaceTextureId = texIds[0]
@@ -108,17 +82,12 @@ void main() {
         surfaceTexture = SurfaceTexture(surfaceTextureId).apply {
             setOnFrameAvailableListener(this@FusionRenderer)
         }
-        surfaceObj = android.view.Surface(surfaceTexture!!)
+        surfaceObj = Surface(surfaceTexture!!)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
 
-        // Create mesh texture
-        val mIds = IntArray(1)
-        GLES20.glGenTextures(1, mIds, 0)
-        meshTexId = mIds[0]
-
-        onSurfaceCreated(surfaceTexture!!)
         surfaceReady = true
-        Log.d(TAG, "Surface created, tex=$surfaceTextureId")
+        onSurfaceCreated(surfaceTexture!!)
+        Log.d(TAG, "Surface created, tex=$surfaceTextureId, surfaceReady=true")
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -126,78 +95,88 @@ void main() {
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        // Update video frame if available
         if (frameAvailable) {
             frameAvailable = false
             try {
                 surfaceTexture?.updateTexImage()
-                surfaceTexture?.getTransformMatrix(stMatrix)
+                frameCount++
             } catch (e: Exception) {
                 Log.w(TAG, "updateTexImage: ${e.message}")
             }
         }
-
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-        if (surfaceTextureId == 0) return
-
-        GLES20.glUseProgram(program)
-
-        // Source texture (external OES)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, surfaceTextureId)
-        GLES20.glUniform1i(uTexLoc, 0)
-
-        // Mesh texture
-        uploadMesh()
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, meshTexId)
-        GLES20.glUniform1i(uMeshLoc, 1)
-
-        val mesh = meshProvider()
-        if (mesh != null) {
-            GLES20.glUniform2f(uMeshSizeLoc, mesh.cols.toFloat(), mesh.rows.toFloat())
+        if (surfaceTextureId == 0) {
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            return
         }
 
-        quad.position(0)
-        GLES20.glVertexAttribPointer(aPosLoc, 2, GLES20.GL_FLOAT, false, 16, quad)
-        GLES20.glEnableVertexAttribArray(aPosLoc)
-        quad.position(2)
-        GLES20.glVertexAttribPointer(aUVLoc, 2, GLES20.GL_FLOAT, false, 16, quad)
-        GLES20.glEnableVertexAttribArray(aUVLoc)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glUseProgram(program)
+        GLES20.glUniform1i(uTexLoc, 0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, surfaceTextureId)
 
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        buildMesh()
+        if (vertCount == 0) return
+
+        vertBuffer.position(0)
+        GLES20.glVertexAttribPointer(aPosLoc, 2, GLES20.GL_FLOAT, false, 16, vertBuffer)
+        GLES20.glEnableVertexAttribArray(aPosLoc)
+        vertBuffer.position(2)
+        GLES20.glVertexAttribPointer(aUVLoc, 2, GLES20.GL_FLOAT, false, 16, vertBuffer)
+        GLES20.glEnableVertexAttribArray(aUVLoc)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, vertCount)
     }
 
     override fun onFrameAvailable(st: SurfaceTexture?) {
         frameAvailable = true
-        glSurfaceView?.requestRender()
     }
 
-    fun markMeshDirty() { meshNeedsUpload = true }
+    fun markMeshDirty() { lastMeshSig = 0L }
 
-    private fun uploadMesh() {
+    private fun buildMesh() {
         val mesh = meshProvider() ?: return
-        val sig = mesh.cols * 31 + mesh.rows * 37 + (mesh.points[0][0].x * 100).toInt()
-        if (!meshNeedsUpload && sig == lastMeshSig) return
-        lastMeshSig = sig; meshNeedsUpload = false
+        // Simple hash of current mesh to avoid unnecessary rebuilds
+        val hash = (mesh.cols * 31 + mesh.rows * 37).toLong() +
+            (mesh.points[0][0].x * 1000).toLong() +
+            (mesh.points[mesh.rows - 1][mesh.cols - 1].y * 1000).toLong()
+        if (hash == lastMeshSig) return
+        lastMeshSig = hash
 
         val cols = mesh.cols; val rows = mesh.rows
-        val buf = ByteBuffer.allocateDirect(cols * rows * 4 * 4)
-            .order(ByteOrder.nativeOrder()).asFloatBuffer()
-        for (r in 0 until rows)
-            for (c in 0 until cols) {
-                val p = mesh.points[r][c]
-                buf.put(p.x); buf.put(p.y); buf.put(0f); buf.put(1f)
-            }
-        buf.position(0)
+        vertBuffer.clear()
+        vertCount = 0
 
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, meshTexId)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, cols, rows,
-            0, GLES20.GL_RGBA, GLES20.GL_FLOAT, buf)
+        // For each cell, render 2 triangles (6 vertices)
+        // Vertex: posX, posY (in NDC), texU, texV
+        // NDC mapping: x: 0->1 → -1->1, y: 0->1 → -1->1
+        for (r in 0 until rows - 1) {
+            for (c in 0 until cols - 1) {
+                val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
+                val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
+                val tu0 = c.toFloat() / (cols - 1); val tu1 = (c + 1).toFloat() / (cols - 1)
+                val tv0 = r.toFloat() / (rows - 1); val tv1 = (r + 1).toFloat() / (rows - 1)
+
+                // Triangle 1: p00-p10-p01
+                emit(p00.x, p00.y, tu0, 1f - tv0)
+                emit(p10.x, p10.y, tu1, 1f - tv0)
+                emit(p01.x, p01.y, tu0, 1f - tv1)
+                // Triangle 2: p10-p11-p01
+                emit(p10.x, p10.y, tu1, 1f - tv0)
+                emit(p11.x, p11.y, tu1, 1f - tv1)
+                emit(p01.x, p01.y, tu0, 1f - tv1)
+            }
+        }
+        vertBuffer.position(0)
+    }
+
+    private fun emit(x: Float, y: Float, tu: Float, tv: Float) {
+        if (vertCount >= MAX_VERTS) return
+        // Map mesh point (0-1) to NDC (-1 to 1), flip Y for OpenGL convention
+        vertBuffer.put(x * 2f - 1f)
+        vertBuffer.put((1f - y) * 2f - 1f)
+        vertBuffer.put(tu)
+        vertBuffer.put(tv)
+        vertCount++
     }
 
     private fun createProgram(vsh: String, fsh: String): Int {

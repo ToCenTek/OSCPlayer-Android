@@ -4,19 +4,18 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
+    <android.opengl.GLSurfaceView
+        android:id="@+id/fusionView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:use_controller="false"
         app:show_buffering="when_playing"
-        app:surface_type="surface_view"
+        app:surface_type="texture_view"
         app:resize_mode="fill" />
-
-    <android.opengl.GLSurfaceView
-        android:id="@+id/fusionView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:visibility="gone" />
 
 </FrameLayout>
