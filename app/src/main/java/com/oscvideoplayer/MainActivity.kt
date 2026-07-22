@@ -81,6 +81,7 @@ class MainActivity : AppCompatActivity() {
     private var screenReceiver: ScreenReceiver? = null
     private var scheduleStartTime: String? = null
     private var httpUploadServer: HttpUploadServer? = null
+    private var fusionMesh: FusionMesh? = null
     private var scheduleStopTime: String? = null
     private var powerOnTime: String? = null
     private var powerOffTime: String? = null
@@ -639,6 +640,7 @@ class MainActivity : AppCompatActivity() {
     private fun startHttpUploadServer() {
         try {
             val dir = getDefaultDirectory()
+            fusionMesh = FusionMesh(9, 9)
             httpUploadServer = HttpUploadServer(
                 port = 8080,
                 uploadDir = dir,
@@ -647,7 +649,24 @@ class MainActivity : AppCompatActivity() {
                 getVideoInfoProvider = { path -> getFileInfo(path) },
                 togglePlayPauseProvider = { runOnUiThread { togglePlayPause() } },
                 isPlayingProvider = { cachedIsPlaying },
-                currentVideoPathProvider = { activeVideoPath }
+                currentVideoPathProvider = { activeVideoPath },
+                fusionProvider = {
+                    val m = fusionMesh ?: return@HttpUploadServer null
+                    object : HttpUploadServer.FusionAPI {
+                        override fun getJson() = m.toJson().toString()
+                        override fun setPoint(row: Int, col: Int, x: Float, y: Float) { m.setPoint(row, col, x, y) }
+                        override fun regularize() { m.regularize() }
+                        override fun reset() { m.reset() }
+                        override fun enable(on: Boolean) { Log.d(TAG, "Fusion enable=$on") }
+                        override fun isEnabled() = false
+                        override fun getStateJson(): String {
+                            val state = org.json.JSONObject()
+                            state.put("enabled", false)
+                            state.put("mesh", m.toJson())
+                            return state.toString()
+                        }
+                    }
+                }
             )
             httpUploadServer?.start()
             Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")
