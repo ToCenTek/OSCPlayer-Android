@@ -2,7 +2,7 @@
 
 ## 核心理念
 
-所有融合模式的统一框架: **裁剪 + 扭曲 + 遮罩** (Crop + Warp + Blend)
+所有融合模式的统一框架: **裁剪 + 网格扭曲 + 遮罩** (Crop + Warp + Blend)
 
 ```
 输入视频 → 裁剪本节点区域 → 网格扭曲 → alpha 遮罩 → 输出
@@ -14,14 +14,16 @@
 
 ## 融合模式分级
 
-| 等级 | 名称 | 说明 | 网格复杂度 | GPU 负载 |
-|------|------|------|-----------|---------|
-| 1 | 单行/单列 (1xN / Nx1) | 一维, 只对 1 条边/2 条边做融合 | 无网格 | 极低 |
-| 2 | NxM 网格 | 二维, 4 边融合 + 角点重叠处理 | 网格 α 图 | 低 |
-| 3 | 异形拼缝 | 拼缝不是直线, 有角度 | 稀疏网格 | 中 |
-| 4 | 单曲面 (柱面) | 一个方向弧形 | 贝塞尔曲线网格 | 中 |
-| 5 | 双曲面 (环面) | 两个方向弧形, 曲率可不同 | 贝塞尔曲面片 | 高 |
-| 6 | 球面/半球/局部球面 | 全 3D 投影映射 | 3D 网格 + 虚拟相机 | 极高 |
+| 等级 | 名称 | 插值方式 | 网格密度 | GPU 负载 |
+|------|------|---------|---------|---------|
+| 1 | 单行/单列 (1xN / Nx1) | 线性 | 低 | 极低 |
+| 2 | NxM 网格 | 线性 | 中 | 低 |
+| 3 | 异形拼缝 | 线性 | 中 | 中 |
+| 4 | 单曲面 (柱面) | 贝塞尔 | 中 | 中 |
+| 5 | 双曲面 (环面) | 贝塞尔 | 高 | 高 |
+| 6 | 球面/半球/局部球面 | 3D 投影 | 高 | 极高 |
+
+所有等级都使用网格 (Mesh). 平面投影只需线性插值, 贝塞尔只对曲面启用.
 
 ---
 
@@ -89,39 +91,72 @@ void main() {
 
 ## 网格扭曲 (Mesh Warp)
 
-统一方案: **贝塞尔网格** (Bezier Patch Grid)
-
 ### 网格定义
 
 ```
 M × N 控制点网格 (M,N 可配置)
-每点: x, y (目标位置, 归一化 0-1)
+每点: x, y (归一化 0-1)
 ```
 
-- 等级 1-2: 不需要扭曲, 只做 α 遮罩
-- 等级 3-4: 16×16 网格 + 线性插值
-- 等级 5: 32×32 网格 + 贝塞尔曲面插值
-- 等级 6: 64×64 网格 + 3D 投影矩阵
+默认插值: **线性双线性插值** (所有等级通用). 贝塞尔为可选开关, 仅等级 4-5 启用.
 
-### 贝塞尔曲线 (等级 4)
+### 线性网格
 
-单弧形 (柱面): 控制点沿一个方向按贝塞尔曲线偏移.
+平面类投影面 (等级 1-3) 使用线性网格:
 
 ```
-P₀, P₁, P₂, P₃ (4 控制点/行)
+for each pixel at (u, v):
+    find cell (i,j) such that u ∈ [i/M, (i+1)/M], v ∈ [j/N, (j+1)/N]
+    warp_u = bilinear_interpolate(P[i][j].x, P[i+1][j].x, P[i][j+1].x, P[i+1][j+1].x, u, v)
+    warp_v = bilinear_interpolate(P[i][j].y, P[i+1][j].y, P[i][j+1].y, P[i+1][j+1].y, u, v)
+```
+
+GPU 直接传网格为 `GL_RG32F` texture, fragment shader 查表插值.
+
+### 网格均匀化 (Mesh Regularization)
+
+**问题**: 拖拽控制点做对齐后, 网格会拉伸不均 — 密集区挤在一起, 稀疏区拉伸, 导致画面变形不均匀.
+
+**方案 — Laplacian 均匀化**:
+
+```
+对每个内部点 P[i][j]:
+    邻居平均 = (P[i-1][j] + P[i+1][j] + P[i][j-1] + P[i][j+1]) / 4
+    P[i][j] += (邻居平均 - P[i][j]) × λ
+```
+
+- λ: 松弛因子 (默认 0.5)
+- 边界点 (第 0/M 行, 第 0/N 列) 固定不变
+- 迭代执行 N 次, 收敛后网格点分布均匀, 整体扭曲形状不变
+
+交互流程:
+```
+1. 拖拽控制点 → 粗调对齐
+2. 执行均匀化 → 消除局部挤压/拉伸
+3. 微调个别点 → 精调
+4. 重复 2-3 直到满意
+```
+
+OSC 命令: `/fusion/mesh/regularize` 触发均匀化, 成功返回 `ok`, 失败返回 `error`.
+
+### 贝塞尔网格 (等级 4-5)
+
+由 `/fusion/bezier/axis` 开启. 平面投影不需要贝塞尔.
+
+单弧形 (柱面): 每行的控制点按 4 点贝塞尔曲线定义.
+
+```
 B(t) = (1-t)³·P₀ + 3(1-t)²·t·P₁ + 3(1-t)·t²·P₂ + t³·P₃
 ```
 
-### 贝塞尔曲面 (等级 5)
-
-双弧形 (环面): 在两个方向上独立定义贝塞尔曲线.
+双弧形 (环面): 两个方向独立定义贝塞尔曲线, GPU 做曲面插值.
 
 ### 3D 投影矩阵 (等级 6)
 
 模拟虚拟相机投影到 3D 球面:
 
 ```
-gl_Position = projectionMatrix * modelViewMatrix * vec4(meshPos, 1.0)
+gl_Position = projectionMatrix × modelViewMatrix × vec4(meshPos, 1.0)
 ```
 
 ---
@@ -156,14 +191,16 @@ gl_Position = projectionMatrix * modelViewMatrix * vec4(meshPos, 1.0)
 | `/fusion/mesh/rows` | N | 网格行数 |
 | `/fusion/mesh/cols` | N | 网格列数 |
 | `/fusion/mesh/point` | row col x y | 设单个控制点位置 |
+| `/fusion/mesh/regularize` | - | Laplacian 均匀化, 消除挤压/拉伸 |
 | `/fusion/mesh/load` | - | 从文件加载网格 |
 | `/fusion/mesh/save` | name | 保存网格为预设 |
 | `/fusion/mesh/reset` | - | 重置为矩形 |
 
-### 贝塞尔 (等级 4-5)
+### 贝塞尔 (等级 4-5 可选)
 
 | 地址 | 参数 | 说明 |
 |------|------|------|
+| `/fusion/bezier/enable` | 0/1 | 开启/关闭贝塞尔插值 |
 | `/fusion/bezier/axis` | h/v/both | 弯曲方向 |
 | `/fusion/bezier/ctrl` | row col x1 y1 x2 y2 x3 y3 | 设贝塞尔控制点 |
 | `/fusion/bezier/tension` | float | 曲线张力 (0-1) |
@@ -195,9 +232,9 @@ app/src/main/java/com/oscvideoplayer/
 ├── FusionEngine.kt          # 融合引擎主入口
 ├── FusionRenderer.kt        # GLSurfaceView.Renderer (shader + mesh)
 ├── FusionShader.kt          # GLSL 源码管理
-├── FusionMesh.kt            # 网格数据结构 + 插值算法
+├── FusionMesh.kt            # 网格数据结构 + 插值 + 均匀化
 ├── FusionBlend.kt           # alpha 遮罩生成
-├── FusionBezier.kt          # 贝塞尔曲线/曲面计算
+├── FusionBezier.kt          # 贝塞尔曲线/曲面计算 (可选, 仅等级 4-5)
 ├── FusionOSC.kt             # OSC 命令处理器
 ├── FusionPreset.kt          # 预置序列化
 ```
@@ -206,25 +243,21 @@ app/src/main/java/com/oscvideoplayer/
 
 ## 实现路线
 
-### Milestone 1 — 基础裁剪 + 1xN 融合
+### Milestone 1 — 基础网格 + 裁剪 + 1xN 融合
 - `FusionEngine` 基本架构
+- `FusionMesh`: 网格定义 + 线性双线性插值 + Laplacian 均匀化
+- `FusionRenderer`: GLSurfaceView 基本渲染管线
 - 视频裁剪 (Media3 `VideoTransformation` 或 `TextureView` 手动 crop)
 - `FusionBlend` 1D alpha 渐变
-- OSC: `/fusion/enable`, `/layout`, `/position`, `/source`, `/overlap`, `/blend/*`
-- 等级 1 到 2
+- OSC: `/fusion/enable`, `/layout`, `/position`, `/source`, `/overlap`, `/blend/*`, `/mesh/*`
+- 等级 1-3
 
-### Milestone 2 — 网格扭曲
-- `FusionMesh` + `FusionRenderer`
-- GLSurfaceView 渲染管线
-- 控制点设置 + 插值
-- 等级 3
-
-### Milestone 3 — 贝塞尔曲面
+### Milestone 2 — 贝塞尔曲面
 - `FusionBezier`
 - 贝塞尔网格插值
-- 等级 4 到 5
+- 等级 4-5
 
-### Milestone 4 — 3D 球面
+### Milestone 3 — 3D 球面
 - 虚拟相机 + 3D 网格
 - 等级 6
 
