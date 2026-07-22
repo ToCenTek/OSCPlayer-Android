@@ -714,9 +714,18 @@ class MainActivity : AppCompatActivity() {
                         }
                         private var _fusionEnabled = true
                         override fun isEnabled() = _fusionEnabled
+                        private var _bezier = false
+                        override fun isBezier() = _bezier
+                        override fun setBezier(on: Boolean) {
+                            _bezier = on
+                            fusionRenderer?.bezier = on
+                            fusionRenderer?.markMeshDirty()
+                            Log.d(TAG, "Bezier=$on")
+                        }
                         override fun getStateJson(): String {
                             val state = org.json.JSONObject()
                             state.put("enabled", isEnabled())
+                            state.put("bezier", isBezier())
                             state.put("mesh", m.toJson())
                             val src = org.json.JSONObject()
                             src.put("x", 0); src.put("y", 0); src.put("w", 1); src.put("h", 1)

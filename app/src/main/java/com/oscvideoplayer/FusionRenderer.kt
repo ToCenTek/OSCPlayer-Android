@@ -63,6 +63,7 @@ void main() {
 
     var glSurfaceView: GLSurfaceView? = null
     @Volatile var enabled: Boolean = false
+    @Volatile var bezier: Boolean = false
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -153,27 +154,59 @@ void main() {
         vertBuffer.clear()
         vertCount = 0
 
-        // For each cell, render 2 triangles (6 vertices)
-        // Vertex: posX, posY (in NDC), texU, texV
-        // NDC mapping: x: 0->1 → -1->1, y: 0->1 → -1->1
+        // For each cell, render 2 triangles (6 vertices) or subdivide for bezier
+        val sub = if (bezier) 8 else 1 // sub-cells per cell edge for bezier smoothing
         for (r in 0 until rows - 1) {
             for (c in 0 until cols - 1) {
-                val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
-                val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
-                val tu0 = c.toFloat() / (cols - 1); val tu1 = (c + 1).toFloat() / (cols - 1)
-                val tv0 = r.toFloat() / (rows - 1); val tv1 = (r + 1).toFloat() / (rows - 1)
+                for (sr in 0 until sub) for (sc in 0 until sub) {
+                    val fu = sc.toFloat() / sub; val fv = sr.toFloat() / sub
+                    val fu1 = (sc + 1).toFloat() / sub; val fv1 = (sr + 1).toFloat() / sub
 
-                // Triangle 1: p00-p10-p01
-                emit(p00.x, p00.y, tu0, tv0)
-                emit(p10.x, p10.y, tu1, tv0)
-                emit(p01.x, p01.y, tu0, tv1)
-                // Triangle 2: p10-p11-p01
-                emit(p10.x, p10.y, tu1, tv0)
-                emit(p11.x, p11.y, tu1, tv1)
-                emit(p01.x, p01.y, tu0, tv1)
+                    val p00 = getPoint(mesh, r, c, fu, fv)
+                    val p10 = getPoint(mesh, r, c, fu1, fv)
+                    val p01 = getPoint(mesh, r, c, fu, fv1)
+                    val p11 = getPoint(mesh, r, c, fu1, fv1)
+
+                    val tu = (c + fu) / (cols - 1); val tv = (r + fv) / (rows - 1)
+                    val tu1 = (c + fu1) / (cols - 1); val tv1 = (r + fv1) / (rows - 1)
+
+                    emit(p00.x, p00.y, tu, tv); emit(p10.x, p10.y, tu1, tv)
+                    emit(p01.x, p01.y, tu, tv1)
+                    emit(p10.x, p10.y, tu1, tv); emit(p11.x, p11.y, tu1, tv1)
+                    emit(p01.x, p01.y, tu, tv1)
+                }
             }
         }
         vertBuffer.position(0)
+    }
+
+    private fun getPoint(mesh: FusionMesh, r: Int, c: Int, fu: Float, fv: Float): FusionMesh.Point {
+        val cols = mesh.cols; val rows = mesh.rows
+        if (!bezier) {
+            val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
+            val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
+            return FusionMesh.Point(
+                lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv),
+                lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
+            )
+        }
+        // Bezier: sample 4 points in X direction at 4 Y positions, then interpolate Y
+        val p0 = catmullRow(mesh, r, c, fu)
+        val p1 = catmullRow(mesh, r + 1, c, fu)
+        val p2 = catmullRow(mesh, r - 1, c, fu)
+        val p3 = catmullRow(mesh, r + 2, c, fu)
+        return FusionMesh.Point(
+            catmullRom1D(p2.x, p0.x, p1.x, p3.x, fv),
+            catmullRom1D(p2.y, p0.y, p1.y, p3.y, fv)
+        )
+    }
+
+    // Catmull-Rom interpolation along a row at position fu between cols c and c+1
+    private fun catmullRow(mesh: FusionMesh, r: Int, c: Int, fu: Float): FusionMesh.Point {
+        val cr = r.coerceIn(0, mesh.rows - 1)
+        val x0 = mesh.colAt(cr, c - 1); val x1 = mesh.colAt(cr, c); val x2 = mesh.colAt(cr, c + 1); val x3 = mesh.colAt(cr, c + 2)
+        val y0 = mesh.rowAt(cr, c - 1); val y1 = mesh.rowAt(cr, c); val y2 = mesh.rowAt(cr, c + 1); val y3 = mesh.rowAt(cr, c + 2)
+        return FusionMesh.Point(catmullRom1D(x0, x1, x2, x3, fu), catmullRom1D(y0, y1, y2, y3, fu))
     }
 
     private fun emit(x: Float, y: Float, tu: Float, tv: Float) {
@@ -185,6 +218,15 @@ void main() {
         vertBuffer.put(tv)
         vertCount++
     }
+
+    private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
+
+    private fun catmullRom1D(p0: Float, p1: Float, p2: Float, p3: Float, t: Float): Float {
+        val t2 = t * t; val t3 = t2 * t
+        return 0.5f * ((2f * p1) + (-p0 + p2) * t + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 + (-p0 + 3f * p1 - 3f * p2 + p3) * t3)
+    }
+
+    // For bezier: interpolate 4 points in a row/column
 
     private fun createProgram(vsh: String, fsh: String): Int {
         val vs = compileShader(GLES20.GL_VERTEX_SHADER, vsh)

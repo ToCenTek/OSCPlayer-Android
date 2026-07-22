@@ -41,6 +41,12 @@ body{background:#0d0d1a;color:#d0d0d0;font-family:system-ui,sans-serif;overflow:
 <button onclick="regularize()">均匀化</button>
 <button onclick="resetMesh()">重置</button>
 <button onclick="resetSource()">源重置</button>
+<div class="sep"></div>
+<label><input type="checkbox" id="cbBezier" onchange="toggleBezier()"> 贝塞尔</label>
+<label>预置: <input type="text" id="presetName" value="my_preset" style="width:80px;background:#1a1a3a;color:#ddd;border:1px solid #3a3a6a;padding:2px 4px;border-radius:2px;font-size:11px"></label>
+<button onclick="savePreset()">保存</button>
+<button onclick="loadPreset()">加载</button>
+<button onclick="listPresets()">列表</button>
 <span style="font-size:10px;color:#556;margin-left:auto">WASD选点 ↑↓→←移动 Shift+WASD扩选 Shift+箭头微调</span>
 </div>
 <div class="canvas-container">
@@ -279,6 +285,14 @@ async function toggle(){const cb=document.getElementById('cbEnable');const s=awa
 async function regularize(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'regularize'})});mesh=r;draw()}
 async function resetMesh(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset'})});mesh=r;sel.clear();cr=1;cc=1;document.getElementById('subdivX').textContent='0';document.getElementById('subdivY').textContent='0';draw()}
 function resetSource(){src={x:0,y:0,w:1,h:1};draw()}
+async function toggleBezier(){const cb=document.getElementById('cbBezier');const r=await fetch('/fusion/api/bezier',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bezier:cb.checked})});const d=await r.json();cb.checked=d.bezier}
+
+async function savePreset(){const n=document.getElementById('presetName').value;if(!n)return;const r=await fetch('/fusion/api/preset/save/'+n);const d=await r.json();alert(d.ok?'保存成功':'保存失败')}
+
+async function loadPreset(){const n=document.getElementById('presetName').value;if(!n)return;const r=await fetch('/fusion/api/preset/load/'+n);if(!r.ok){alert('预置不存在');return}const s=await r.json()
+  if(s.mesh){mesh=s.mesh;document.getElementById('subdivX').textContent=s.mesh.subdivX||0;document.getElementById('subdivY').textContent=s.mesh.subdivY||0;cr=Math.min(cr,mesh.rows-1);cc=Math.min(cc,mesh.cols-1);sel.clear();draw()}}
+
+async function listPresets(){const r=await fetch('/fusion/api/preset/list');const names=await r.json();alert(names.length?'预置列表:\n'+names.join('\n'):'无预置')}
 
 load()
 setInterval(load,3000)

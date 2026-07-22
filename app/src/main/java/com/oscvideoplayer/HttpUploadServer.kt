@@ -630,6 +630,8 @@ btn.onclick=function(){
         fun reset()
         fun enable(on: Boolean)
         fun isEnabled(): Boolean
+        fun isBezier(): Boolean
+        fun setBezier(on: Boolean)
         fun getStateJson(): String
         fun savePreset(name: String): Boolean
         fun loadPreset(name: String): Boolean
@@ -714,6 +716,14 @@ btn.onclick=function(){
                         api.enable(json.optBoolean("enable", true))
                     }
                     sendResponse(client, 200, "OK", "application/json", """{"enabled":${api.isEnabled()}}""")
+                }
+                "bezier" -> {
+                    if (method == "POST" && contentLength > 0) {
+                        val body = readBody(input, contentLength)
+                        val json = org.json.JSONObject(body)
+                        api.setBezier(json.optBoolean("bezier", false))
+                    }
+                    sendResponse(client, 200, "OK", "application/json", """{"bezier":${api.isBezier()}}""")
                 }
                 "preset" -> {
                     when {

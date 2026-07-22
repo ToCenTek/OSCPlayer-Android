@@ -168,4 +168,16 @@ class FusionMesh {
             }
         }
     }
+
+    fun colAt(r: Int, c: Int): Float {
+        if (c < 0) return points[r.coerceIn(0, rows - 1)][0].x
+        if (c >= cols) return points[r.coerceIn(0, rows - 1)][cols - 1].x
+        return points[r.coerceIn(0, rows - 1)][c].x
+    }
+
+    fun rowAt(r: Int, c: Int): Float {
+        if (r < 0) return points[0][c.coerceIn(0, cols - 1)].y
+        if (r >= rows) return points[rows - 1][c.coerceIn(0, cols - 1)].y
+        return points[r][c.coerceIn(0, cols - 1)].y
+    }
 }
