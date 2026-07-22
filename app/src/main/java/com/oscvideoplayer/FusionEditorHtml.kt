@@ -182,15 +182,20 @@ function findPt(cx,cy){
 }
 
 // Mouse
+let dragOrigins = {} // store initial positions of selected points on drag start
+
 OC.addEventListener('mousedown',e=>{
   const r=OC.getBoundingClientRect(),mx=(e.clientX-r.left)*OC.width/r.width,my=(e.clientY-r.top)*OC.height/r.height
   const hit=findPt(mx,my)
   if(hit){
     if(e.shiftKey){const k=hit.row+','+hit.col;if(sel.has(k))sel.delete(k);else sel.add(k)}
     else if(e.ctrlKey||e.metaKey){sel.add(hit.row+','+hit.col)}
-    else{// Move cursor, start potential rectangle selection
+    else{// Start drag with all selected points
       if(!sel.has(hit.row+','+hit.col)){sel.clear();sel.add(hit.row+','+hit.col)}
       cr=hit.row;cc=hit.col;drag='pt'
+      // Store initial positions
+      dragOrigins={mx:mx,my:my,pts:{}}
+      for(const k of sel){const rc=k.split(',');const p=mesh.points[+rc[0]][+rc[1]];dragOrigins.pts[k]={x:p.x,y:p.y}}
     }
     draw();return
   }
@@ -200,9 +205,9 @@ OC.addEventListener('mousedown',e=>{
 
 OC.addEventListener('mousemove',e=>{
   const r=OC.getBoundingClientRect(),mx=(e.clientX-r.left)*OC.width/r.width,my=(e.clientY-r.top)*OC.height/r.height
-  if(drag==='pt'&&mesh){const aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
-    const mx_=(mx-ox0)/aw,my_=(my-oy0)/ah
-    for(const k of sel){const rc=k.split(',');mesh.points[+rc[0]][+rc[1]].x=mx_;mesh.points[+rc[0]][+rc[1]].y=my_}
+  if(drag==='pt'&&mesh&&dragOrigins){const aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+    const dx=(mx-dragOrigins.mx)/aw,dy=(my-dragOrigins.my)/ah
+    for(const k of sel){const o=dragOrigins.pts[k];if(o){const rc=k.split(',');mesh.points[+rc[0]][+rc[1]].x=o.x+dx;mesh.points[+rc[0]][+rc[1]].y=o.y+dy}}
     draw()
   }
   if(drag==='pan'){px+=(e.clientX-start.x)/10;py+=(e.clientY-start.y)/10;start={x:e.clientX,y:e.clientY};draw()}
@@ -223,7 +228,7 @@ OC.addEventListener('mouseup',e=>{
     draw()
   }
   if(drag==='pt'&&mesh){const pts=[];for(const k of sel){const rc=k.split(',');pts.push({row:+rc[0],col:+rc[1],x:mesh.points[+rc[0]][+rc[1]].x,y:mesh.points[+rc[0]][+rc[1]].y})};if(pts.length)setPts(pts)}
-  drag=null;start=null
+  drag=null;start=null;dragOrigins=null
 })
 
 OC.addEventListener('mouseleave',()=>{drag=null})
