@@ -640,7 +640,7 @@ class MainActivity : AppCompatActivity() {
     private fun startHttpUploadServer() {
         try {
             val dir = getDefaultDirectory()
-            fusionMesh = FusionMesh(9, 9)
+            fusionMesh = FusionMesh()
             httpUploadServer = HttpUploadServer(
                 port = 8080,
                 uploadDir = dir,
