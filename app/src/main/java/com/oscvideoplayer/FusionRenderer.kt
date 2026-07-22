@@ -157,13 +157,13 @@ void main() {
                 val tv0 = r.toFloat() / (rows - 1); val tv1 = (r + 1).toFloat() / (rows - 1)
 
                 // Triangle 1: p00-p10-p01
-                emit(p00.x, p00.y, tu0, 1f - tv0)
-                emit(p10.x, p10.y, tu1, 1f - tv0)
-                emit(p01.x, p01.y, tu0, 1f - tv1)
+                emit(p00.x, p00.y, tu0, tv0)
+                emit(p10.x, p10.y, tu1, tv0)
+                emit(p01.x, p01.y, tu0, tv1)
                 // Triangle 2: p10-p11-p01
-                emit(p10.x, p10.y, tu1, 1f - tv0)
-                emit(p11.x, p11.y, tu1, 1f - tv1)
-                emit(p01.x, p01.y, tu0, 1f - tv1)
+                emit(p10.x, p10.y, tu1, tv0)
+                emit(p11.x, p11.y, tu1, tv1)
+                emit(p01.x, p01.y, tu0, tv1)
             }
         }
         vertBuffer.position(0)
