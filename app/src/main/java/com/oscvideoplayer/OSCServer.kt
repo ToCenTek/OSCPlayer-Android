@@ -21,7 +21,8 @@ class OSCServer(
 
     companion object {
         private const val TAG = "OSCServer"
-        private const val MULTICAST_ADDR = "239.0.0.139"
+        private var MULTICAST_ADDR = "239.0.0.139"
+        private var MULTICAST_PORT = 8000
         private var instance: OSCServer? = null
         private var pendingVideoPath: String? = null
         private var pendingActivity: MainActivity? = null
@@ -52,6 +53,11 @@ class OSCServer(
         fun setVideoScanner(scanner: VideoScanner?) {
             instance?.videoScanner = scanner
         }
+
+        fun getMulticastAddr(): String = MULTICAST_ADDR
+        fun getMulticastPort(): Int = MULTICAST_PORT
+        fun setMulticastAddr(addr: String) { MULTICAST_ADDR = addr }
+        fun setMulticastPort(p: Int) { MULTICAST_PORT = p }
     }
 
     init {
@@ -291,19 +297,7 @@ class OSCServer(
             }
 
             "getgop" -> {
-                val name = if (parts.size > 1) parts.subList(1, parts.size).joinToString("/") else ""
-                         ?: (msg.args.getOrNull(0) as? String)?.takeIf { it.isNotEmpty() } ?: ""
-                val videoPath = findVideo(name)
-                if (videoPath != null) {
-                    val kfs = mainActivity?.getVideoKeyframes(videoPath)
-                    if (kfs != null) {
-                        response = OSCMessage("/GOP", listOf(kfs.first.toString(), kfs.second.toString(), kfs.third.toString()))
-                    } else {
-                        response = OSCMessage("/Error", listOf("Cannot read GOP: $name"))
-                    }
-                } else {
-                    response = OSCMessage("/Error", listOf("Video not found: $name"))
-                }
+                response = OSCMessage("/Error", listOf("GOP scan removed"))
             }
 
             "stop" -> {
@@ -453,8 +447,7 @@ class OSCServer(
                                     duration = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                                     r.release()
                                 } catch (_: Exception) {}
-                                val kfs = mainActivity?.getVideoKeyframes(path)
-                                if (kfs != null) { secondKf = kfs.first; lastKf = kfs.second; fps = kfs.third }
+
                             }
                             lines.add("$i $name $duration $fps $secondKf $lastKf")
                         }
@@ -506,70 +499,6 @@ class OSCServer(
                 mainActivity?.showText(text, fontSize, position)
                 val isVisible = text.isNotEmpty() && text != "0"
                 response = OSCMessage("/TCT", listOf(if (isVisible) "T" else "F"))
-            }
-
-            "info" -> {
-                val param = parts.getOrNull(1) ?: ""
-                if (param == "display") {
-                    val dinfo = mainActivity?.getDisplayInfo() ?: emptyMap()
-                    val lines = dinfo.entries.joinToString("\n") { "${it.key}: ${it.value}" }
-                    response = OSCMessage("/DisplayInfo", listOf(lines))
-                } else {
-                    val name = if (param.isEmpty() && msg.args.isNotEmpty()) msg.args[0]?.toString() ?: "" else param
-                    if (name.isNotEmpty()) {
-                        val videoPath = findVideo(name)
-                        if (videoPath != null) {
-                            val retriever = android.media.MediaMetadataRetriever()
-                            try {
-                                retriever.setDataSource(videoPath)
-                                val duration = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
-                                val w = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH) ?: "?"
-                                val h = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT) ?: "?"
-                                val file = File(videoPath)
-                                response = OSCMessage("/VideoInfo", listOf(
-                                    "name:${file.name}",
-                                    "path:$videoPath",
-                                    "size:${file.length()}",
-                                    "duration:${duration}ms",
-                                    "resolution:${w}x${h}"
-                                ))
-                            } catch (e: Exception) {
-                                response = OSCMessage("/Error", listOf("Cannot read info: ${e.message}"))
-                            } finally {
-                                retriever.release()
-                            }
-                        } else {
-                            response = OSCMessage("/Error", listOf("Video not found: $name"))
-                        }
-                    } else {
-                        val info = mainActivity?.getVideoInfo() ?: emptyMap()
-                        response = OSCMessage("/Info", listOf(
-                            "filename:${info["filename"]}",
-                            "resolution:${info["width"]}x${info["height"]}",
-                            "duration:${info["duration"]}ms",
-                            "fps:${info["frameRate"]}",
-                            "position:${info["currentPosition"]}ms",
-                            "playing:${if (info["isPlaying"] == true) "yes" else "no"}"
-                        ))
-                    }
-                }
-            }
-
-            "status" -> {
-                val info = mainActivity?.getVideoInfo() ?: emptyMap()
-                val playlistInfo = mainActivity?.getPlaylistStatus()
-                response = OSCMessage("/Status", listOf(
-                    "playing:${info["isPlaying"]}",
-                    "filename:${info["filename"]}",
-                    "position:${info["currentPosition"]}ms",
-                    "duration:${info["duration"]}ms",
-                    "volume:${info["volume"]}",
-                    "speed:${info["speed"]}",
-                    "loop:${info["loop"]}",
-                    "playlistIndex:${playlistInfo?.get("index")}",
-                    "playlistSize:${playlistInfo?.get("size")}",
-                    "playlistMode:${playlistInfo?.get("mode")}"
-                ))
             }
 
             "fps" -> {
@@ -791,17 +720,32 @@ class OSCServer(
                                     response = OSCMessage("/Config", listOf("Usage: /config/display/mode/N (0=default, 1=wide, 2=HDR)"))
                                 }
                             }
-                            "info" -> {
-                                val dinfo = mainActivity?.getDisplayInfo() ?: emptyMap()
-                                val lines = dinfo.entries.joinToString("\n") { "${it.key}: ${it.value}" }
-                                response = OSCMessage("/DisplayInfo", listOf(lines))
-                            }
                             else -> {
                                 response = OSCMessage("/Config", listOf("Unknown display command: $sub"))
                             }
                         }
                     }
+                    "surface" -> {
+                        val enable = if (value.isNotEmpty()) value.toIntOrNull() ?: 1
+                        else (msg.args.getOrNull(0) as? Number)?.toInt() ?: 1
+                        Log.d(TAG, "surface: enable=$enable mainActivity=${mainActivity != null}")
+                        if (mainActivity != null) {
+                            mainActivity?.setSurfaceMode(enable != 0)
+                        }
+                        response = OSCMessage("/Config", listOf("surface=${if (enable != 0) "on (performance)" else "off (debug)"}"))
+                    }
                     else -> response = OSCMessage("/Error", listOf("Unknown config key: $key"))
+                }
+            }
+
+            "3d" -> {
+                val mode = parts.getOrNull(1) ?: (msg.args.getOrNull(0) as? String) ?: ""
+                val valid = arrayOf("off", "left", "right", "sbs_left", "sbs_right", "ou_top", "ou_bottom")
+                if (mode.isNotEmpty() && mode in valid) {
+                    mainActivity?.setStereoMode(mode)
+                    response = OSCMessage("/3D", listOf(mode))
+                } else {
+                    response = OSCMessage("/3D", listOf(mainActivity?.getStereoMode() ?: "off"))
                 }
             }
 
@@ -887,7 +831,12 @@ class OSCServer(
             }
 
             "overlay" -> {
-                mainActivity?.toggleDebugOverlay()
+                val valOrNull = parts.getOrNull(1)?.toIntOrNull() ?: (msg.args.getOrNull(0) as? Number)?.toInt() ?: -1
+                if (valOrNull >= 0) {
+                    if ((valOrNull == 1) != mainActivity?.isDebugOverlayOn()) mainActivity?.toggleDebugOverlay()
+                } else {
+                    mainActivity?.toggleDebugOverlay()
+                }
                 response = OSCMessage("/Overlay", listOf(mainActivity?.isDebugOverlayOn() == true))
             }
 
@@ -920,9 +869,6 @@ class OSCServer(
                     appendLine("  /fullscreen         Fullscreen")
                     appendLine("  /upload             Show web upload URL")
                     appendLine("Info:")
-                    appendLine("  /info[/name]        Video info (optional name)")
-                    appendLine("  /info/display       Show display capabilities")
-                    appendLine("  /status             Full status")
                     appendLine("  /fps                Get FPS")
                     appendLine("  /fps/set/rate       Set FPS")
                     appendLine("Config:")
@@ -1052,6 +998,7 @@ class OSCServer(
             val typeStr = "," + tags.joinToString("")
             val typeBytes = typeStr.toByteArray(Charsets.UTF_8)
             baos.write(typeBytes)
+            baos.write(0)
             while (baos.size() % 4 != 0) baos.write(0)
 
             for (arg in args) {

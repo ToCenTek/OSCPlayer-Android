@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var cachedVolume = 0f
     private var savedVolume = 0f
     private var debugOverlayEnabled = false
+    private var showSpeedToast = true
+    private var stereoMode = "off"
 
     private lateinit var prefs: SharedPreferences
     private var nsdManager: NsdManager? = null
@@ -100,6 +102,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_POWER_SHUTDOWN = "power_shutdown_time"
         private const val KEY_POWER_REBOOT = "power_reboot_time"
         private const val KEY_SURFACE_MODE = "surface_mode"
+        private const val KEY_SPEED_TOAST = "speed_toast"
+        private const val KEY_STEREO_MODE = "stereo_mode"
         private const val NSD_SERVICE_TYPE = "_osc._udp."
         private const val NSD_SERVICE_PORT = 8000
         @Volatile
@@ -221,6 +225,8 @@ class MainActivity : AppCompatActivity() {
         tryAutoSetDefaultLauncher()
 
         isLoopEnabled = prefs.getBoolean(KEY_LOOP_ENABLED, true)
+        showSpeedToast = prefs.getBoolean(KEY_SPEED_TOAST, true)
+        stereoMode = prefs.getString(KEY_STEREO_MODE, "off") ?: "off"
 
         scheduleStartTime = prefs.getString(KEY_SCHEDULE_START, null)
         scheduleStopTime = prefs.getString(KEY_SCHEDULE_STOP, null)
@@ -287,41 +293,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "NSD error: ${e.message}")
         }
-    }
-
-    fun getVideoKeyframes(path: String): Triple<Long, Long, Double>? {
-        return try {
-            val extractor = android.media.MediaExtractor()
-            extractor.setDataSource(path)
-            val trackCount = extractor.trackCount
-            val videoTrack = (0 until trackCount).firstOrNull { i ->
-                try { extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true } catch (_: Exception) { false }
-            } ?: run { extractor.release(); return null }
-            extractor.selectTrack(videoTrack)
-            val format = extractor.getTrackFormat(videoTrack)
-            var fps = try { if (format.containsKey(android.media.MediaFormat.KEY_FRAME_RATE)) format.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() else 0.0 } catch (_: Exception) { 0.0 }
-            if (fps <= 0.0) fps = getFrameRate(path)
-            var kfTimes = mutableListOf<Long>()
-            var sampleCount = 0
-            while (extractor.advance()) {
-                sampleCount++
-                try {
-                    val flags = extractor.sampleFlags
-                    val time = extractor.sampleTime
-                    if (flags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                        kfTimes.add(time / 1000)
-                    }
-                } catch (_: Exception) {}
-            }
-            extractor.release()
-            if (kfTimes.size < 1) return null
-            val firstKf = kfTimes[0]
-            if (firstKf <= 0) return null
-            // filter out trailing zero timestamps (Amlogic platform bug)
-            while (kfTimes.size > 1 && kfTimes.last() == 0L) kfTimes.removeAt(kfTimes.lastIndex)
-            val lastKf = kfTimes.last()
-            Triple(firstKf, lastKf, fps)
-        } catch (_: Exception) { null }
     }
 
     // --- Alignment ---
@@ -619,6 +590,9 @@ class MainActivity : AppCompatActivity() {
                      })
                 }
             playerView?.player = player
+            if (stereoMode != "off") {
+                playerView?.postDelayed({ applyStereoTransform() }, 300)
+            }
             startWatchdog()
             startPositionUpdater()
         }
@@ -796,7 +770,7 @@ class MainActivity : AppCompatActivity() {
             initializePlayer()
             val exoPlayer = player ?: run { switchingVideo = false; return@runOnUiThread }
 
-            videoFrameRate = getFrameRate(path)
+            videoFrameRate = 0.0
 
             exoPlayer.stop()
             exoPlayer.clearMediaItems()
@@ -810,30 +784,6 @@ class MainActivity : AppCompatActivity() {
             hideSystemUI()
             switchingVideo = false
         }
-    }
-
-    private fun getFrameRate(path: String): Double {
-        return try {
-            val extractor = android.media.MediaExtractor()
-            extractor.setDataSource(path)
-            val track = (0 until extractor.trackCount).firstOrNull { i ->
-                try { extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("video/") == true } catch (_: Exception) { false }
-            }
-            val fps = if (track != null) {
-                val fmt = extractor.getTrackFormat(track)
-                if (fmt.containsKey(android.media.MediaFormat.KEY_FRAME_RATE))
-                    try { fmt.getFloat(android.media.MediaFormat.KEY_FRAME_RATE).toDouble() } catch (_: Exception) { 0.0 }
-                else 0.0
-            } else 0.0
-            extractor.release()
-            if (fps > 0.0) return fps
-            // fallback: metadata
-            val r = android.media.MediaMetadataRetriever()
-            r.setDataSource(path)
-            val fps2 = r.extractMetadata(30)?.toDoubleOrNull() ?: r.extractMetadata(27)?.toDoubleOrNull() ?: 0.0
-            r.release()
-            fps2
-        } catch (_: Exception) { 0.0 }
     }
 
     fun setVideoFrameRate(fps: Double) { videoFrameRate = fps }
@@ -952,16 +902,71 @@ class MainActivity : AppCompatActivity() {
     fun setPlaybackSpeed(speed: Float, autoRecoverMs: Long = 0L) {
         speedRecoveryJob?.cancel()
         playbackSpeed = speed.coerceIn(0.25f, 4.0f)
-        runOnUiThread { player?.setPlaybackSpeed(playbackSpeed) }
+        runOnUiThread {
+            player?.setPlaybackSpeed(playbackSpeed)
+            if (showSpeedToast) android.widget.Toast.makeText(this, "×" + String.format("%.3f", speed), android.widget.Toast.LENGTH_SHORT).show()
+        }
         if (autoRecoverMs > 0 && speed != 1.0f) {
             speedRecoveryJob = lifecycleScope.launch {
                 delay(autoRecoverMs)
                 if (playbackSpeed != 1.0f) {
                     playbackSpeed = 1.0f
                     player?.setPlaybackSpeed(1.0f)
+                    if (showSpeedToast) android.widget.Toast.makeText(this@MainActivity, "×1.000 \u6062\u590d", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
         }
+    }
+
+    fun setSpeedToast(enabled: Boolean) {
+        showSpeedToast = enabled
+        prefs.edit().putBoolean(KEY_SPEED_TOAST, enabled).apply()
+    }
+
+    fun setSurfaceMode(surface: Boolean) {
+        android.util.Log.d(TAG, "setSurfaceMode: surface=$surface")
+        prefs.edit().putBoolean(KEY_SURFACE_MODE, surface).apply()
+        val modeName = if (surface) "性能模式" else "调试模式"
+        runOnUiThread {
+            android.util.Log.d(TAG, "setSurfaceMode: running recreate on UI thread")
+            Toast.makeText(this@MainActivity, "切换到 $modeName", Toast.LENGTH_SHORT).show()
+            recreate()
+        }
+    }
+
+    fun setStereoMode(mode: String) {
+        stereoMode = mode
+        prefs.edit().putString(KEY_STEREO_MODE, mode).apply()
+        // 3D 模式需要 TextureView 做矩阵变换
+        if (mode != "off") {
+            val useSurface = prefs?.getBoolean(KEY_SURFACE_MODE, true) ?: true
+            if (useSurface) {
+                prefs.edit().putBoolean(KEY_SURFACE_MODE, false).apply()
+                Toast.makeText(this, "立体模式需 TextureView, 重启中...", Toast.LENGTH_SHORT).show()
+                recreate()
+                return
+            }
+        }
+        applyStereoTransform()
+    }
+
+    fun getStereoMode(): String = stereoMode
+
+    private fun applyStereoTransform() {
+        val tv = try { playerView?.videoSurfaceView as? android.view.TextureView } catch (_: Exception) { null }
+        android.util.Log.d(TAG, "applyStereoTransform: mode=$stereoMode tv=${tv != null} pv=${playerView != null}")
+        if (tv == null) return
+        val m = android.graphics.Matrix()
+        val w = tv.width.toFloat()
+        val h = tv.height.toFloat()
+        when (stereoMode) {
+            "left", "sbs_left" -> { m.setScale(2f, 1f); m.postTranslate(-w / 2f, 0f) }
+            "right", "sbs_right" -> { m.setScale(2f, 1f); m.postTranslate(0f, 0f) }
+            "ou_top", "ou_left" -> { m.setScale(1f, 2f); m.postTranslate(0f, -h / 2f) }
+            "ou_bottom", "ou_right" -> { m.setScale(1f, 2f); m.postTranslate(0f, 0f) }
+            else -> m.reset()
+        }
+        tv.setTransform(m)
     }
 
     fun getPlaybackSpeed(): Float = playbackSpeed
@@ -1737,6 +1742,9 @@ class MainActivity : AppCompatActivity() {
             "恢复默认设置",
             "调试信息",
             if (isSurface) "▸ 性能模式" else "▸ 调试模式",
+            if (showSpeedToast) "▸ 同步提示" else "▸ 同步提示(关)",
+            "立体模式 [${stereoMode}]",
+            "组播设置",
             "退出应用"
         )) { which ->
             when (which) {
@@ -1769,7 +1777,14 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "切换至${if (newMode) "性能" else "调试"}模式, 重启中...", Toast.LENGTH_SHORT).show()
                     recreate()
                 }
-                11 -> finish()
+                11 -> {
+                    showSpeedToast = !showSpeedToast
+                    prefs.edit().putBoolean(KEY_SPEED_TOAST, showSpeedToast).apply()
+                    Toast.makeText(this, "同步提示: ${if (showSpeedToast) "开" else "关"}", Toast.LENGTH_SHORT).show()
+                }
+                12 -> showStereoModeMenu()
+                13 -> showMulticastSettings()
+                14 -> finish()
             }
         }
     }
@@ -1838,6 +1853,53 @@ class MainActivity : AppCompatActivity() {
             .setTitle("显示信息")
             .setMessage(text)
             .setPositiveButton("确定", null)
+            .show()
+    }
+
+    private fun showStereoModeMenu() {
+        showMenuWithWrap("立体模式", arrayOf(
+            if (stereoMode == "off") "▸ 关闭" else "关闭",
+            if (stereoMode == "left") "▸ 左(SBS)" else "左(SBS)",
+            if (stereoMode == "right") "▸ 右(SBS)" else "右(SBS)",
+            if (stereoMode == "ou_top") "▸ 上(OU)" else "上(OU)",
+            if (stereoMode == "ou_bottom") "▸ 下(OU)" else "下(OU)"
+        )) { which ->
+            val mode = arrayOf("off", "left", "right", "ou_top", "ou_bottom")[which]
+            setStereoMode(mode)
+            Toast.makeText(this, "立体: $mode", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showMulticastSettings() {
+        val addr = com.oscvideoplayer.OSCServer.getMulticastAddr()
+        val port = com.oscvideoplayer.OSCServer.getMulticastPort()
+        val input = android.widget.EditText(this).apply {
+            setText("$addr:$port")
+            selectAll()
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("组播设置")
+            .setMessage("格式: 地址:端口\n修改端口需重启播放器生效")
+            .setView(input)
+            .setPositiveButton("修改") { _, _ ->
+                val text = input.text.toString().trim()
+                val colon = text.lastIndexOf(':')
+                if (colon > 0) {
+                    val newAddr = text.substring(0, colon)
+                    val newPort = text.substring(colon + 1).toIntOrNull()
+                    if (newAddr.isNotEmpty() && newPort != null && newPort in 1024..65535) {
+                        val oldPort = com.oscvideoplayer.OSCServer.getMulticastPort()
+                        com.oscvideoplayer.OSCServer.setMulticastAddr(newAddr)
+                        com.oscvideoplayer.OSCServer.setMulticastPort(newPort)
+                        Toast.makeText(this, "地址=$newAddr 端口=$newPort${if (newPort != oldPort) " (重启生效)" else ""}", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "格式错误, 正确示例: 239.0.0.139:8000", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(this, "格式错误, 正确示例: 239.0.0.139:8000", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 
