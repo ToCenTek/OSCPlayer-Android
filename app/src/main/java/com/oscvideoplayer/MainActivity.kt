@@ -709,11 +709,10 @@ class MainActivity : AppCompatActivity() {
                         override fun enable(on: Boolean) {
                             Log.d(TAG, "Fusion enable=$on")
                             _fusionEnabled = on
-                            // Always use GL rendering; toggle controls mesh warp
-                            // enable(true) = mesh applied, enable(false) = identity mesh
+                            fusionRenderer?.enabled = on
                             fusionRenderer?.markMeshDirty()
                         }
-                        private var _fusionEnabled = false
+                        private var _fusionEnabled = true
                         override fun isEnabled() = _fusionEnabled
                         override fun getStateJson(): String {
                             val state = org.json.JSONObject()
@@ -729,6 +728,33 @@ class MainActivity : AppCompatActivity() {
                                 state.put("displayHeight", dm.heightPixels)
                             } catch (_: Exception) {}
                             return state.toString()
+                        }
+                        override fun savePreset(name: String): Boolean {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            dir.mkdirs()
+                            val file = java.io.File(dir, "$name.json")
+                            return try {
+                                file.writeText(m.toJson().toString(2))
+                                Log.d(TAG, "Preset saved: $file")
+                                true
+                            } catch (e: Exception) { false }
+                        }
+                        override fun loadPreset(name: String): Boolean {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            val file = java.io.File(dir, "$name.json")
+                            return try {
+                                val json = org.json.JSONObject(file.readText())
+                                m.fromJson(json)
+                                fusionRenderer?.markMeshDirty()
+                                Log.d(TAG, "Preset loaded: $file")
+                                true
+                            } catch (e: Exception) { false }
+                        }
+                        override fun listPresets(): String {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            val files = dir.listFiles { f -> f.name.endsWith(".json") } ?: emptyArray()
+                            val names = files.map { it.name.removeSuffix(".json") }
+                            return org.json.JSONArray(names.toList()).toString()
                         }
                     }
                 }

@@ -631,6 +631,9 @@ btn.onclick=function(){
         fun enable(on: Boolean)
         fun isEnabled(): Boolean
         fun getStateJson(): String
+        fun savePreset(name: String): Boolean
+        fun loadPreset(name: String): Boolean
+        fun listPresets(): String
     }
 
     private var _fusionApi: FusionAPI? = null
@@ -650,8 +653,11 @@ btn.onclick=function(){
             return sendResponse(client, 503, "Unavailable", "application/json", """{"error":"fusion not initialized"}""")
         }
         val cmd = path.removePrefix("/fusion/api/").removeSuffix("/")
+        val firstSlash = cmd.indexOf('/')
+        val mainCmd = if (firstSlash > 0) cmd.substring(0, firstSlash) else cmd
+        val subPath = if (firstSlash > 0) cmd.substring(firstSlash + 1) else ""
         try {
-            when (cmd) {
+            when (mainCmd) {
                 "state" -> sendResponse(client, 200, "OK", "application/json", api.getStateJson())
                 "mesh" -> {
                     if (method == "POST" && contentLength > 0) {
@@ -708,6 +714,21 @@ btn.onclick=function(){
                         api.enable(json.optBoolean("enable", true))
                     }
                     sendResponse(client, 200, "OK", "application/json", """{"enabled":${api.isEnabled()}}""")
+                }
+                "preset" -> {
+                    when {
+                        subPath == "list" -> sendResponse(client, 200, "OK", "application/json", api.listPresets())
+                        subPath.startsWith("save/") -> {
+                            val ok = api.savePreset(subPath.removePrefix("save/"))
+                            sendResponse(client, 200, "OK", "application/json", """{"ok":$ok}""")
+                        }
+                        subPath.startsWith("load/") -> {
+                            val ok = api.loadPreset(subPath.removePrefix("load/"))
+                            if (ok) sendResponse(client, 200, "OK", "application/json", api.getStateJson())
+                            else sendResponse(client, 404, "Not Found", "application/json", """{"error":"preset not found"}""")
+                        }
+                        else -> sendResponse(client, 400, "Bad Request", "application/json", """{"error":"unknown preset command"}""")
+                    }
                 }
                 else -> sendResponse(client, 404, "Not Found", "application/json", """{"error":"unknown endpoint"}""")
             }

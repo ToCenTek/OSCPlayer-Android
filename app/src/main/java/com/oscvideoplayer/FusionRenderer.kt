@@ -62,6 +62,7 @@ void main() {
     private var lastMeshSig = 0L
 
     var glSurfaceView: GLSurfaceView? = null
+    @Volatile var enabled: Boolean = false
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -136,6 +137,12 @@ void main() {
     private fun buildMesh() {
         val mesh = meshProvider() ?: return
         // Simple hash of current mesh to avoid unnecessary rebuilds
+        if (!enabled) {
+            vertBuffer.clear(); vertCount = 0
+            emit(0f, 0f, 0f, 0f); emit(1f, 0f, 1f, 0f); emit(0f, 1f, 0f, 1f)
+            emit(1f, 0f, 1f, 0f); emit(1f, 1f, 1f, 1f); emit(0f, 1f, 0f, 1f)
+            vertBuffer.position(0); return
+        }
         val hash = (mesh.cols * 31 + mesh.rows * 37).toLong() +
             (mesh.points[0][0].x * 1000).toLong() +
             (mesh.points[mesh.rows - 1][mesh.cols - 1].y * 1000).toLong()
