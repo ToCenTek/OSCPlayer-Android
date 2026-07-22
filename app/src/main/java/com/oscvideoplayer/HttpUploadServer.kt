@@ -625,6 +625,7 @@ btn.onclick=function(){
         fun getJson(): String
         fun setPoint(row: Int, col: Int, x: Float, y: Float)
         fun resize(cols: Int, rows: Int)
+        fun setSubdiv(sx: Int, sy: Int)
         fun regularize()
         fun reset()
         fun enable(on: Boolean)
@@ -673,6 +674,12 @@ btn.onclick=function(){
                                 val newCols = json.optInt("cols", 9).coerceIn(2, 65)
                                 val newRows = json.optInt("rows", 9).coerceIn(2, 65)
                                 api.resize(newCols, newRows)
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
+                            }
+                            "subdiv" -> {
+                                val sx = json.optInt("subdivX", 0)
+                                val sy = json.optInt("subdivY", 0)
+                                api.setSubdiv(sx, sy)
                                 sendResponse(client, 200, "OK", "application/json", api.getJson())
                             }
                             "regularize" -> {

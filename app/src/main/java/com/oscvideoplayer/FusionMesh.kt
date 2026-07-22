@@ -4,61 +4,75 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
-class FusionMesh(
-    var cols: Int = 16,
-    var rows: Int = 16
-) {
+class FusionMesh {
     companion object {
         private const val TAG = "FusionMesh"
+        private const val MAX_SUBDIV = 6
     }
 
     data class Point(var x: Float, var y: Float)
 
-    var points: Array<Array<Point>> = Array(rows) { r ->
-        Array(cols) { c ->
-            Point(c.toFloat() / (cols - 1).coerceAtLeast(1),
-                  r.toFloat() / (rows - 1).coerceAtLeast(1))
-        }
-    }
+    var points: Array<Array<Point>> = arrayOf(
+        arrayOf(Point(0f, 0f), Point(1f, 0f)),
+        arrayOf(Point(0f, 1f), Point(1f, 1f))
+    )
         private set
 
-    fun reset() {
-        for (r in 0 until rows) {
-            for (c in 0 until cols) {
-                points[r][c].x = c.toFloat() / (cols - 1).coerceAtLeast(1)
-                points[r][c].y = r.toFloat() / (rows - 1).coerceAtLeast(1)
-            }
-        }
+    var cols: Int = 2
+        private set
+    var rows: Int = 2
+        private set
+    var subdivX: Int = 0
+        private set
+    var subdivY: Int = 0
+        private set
+
+    fun setSubdiv(sx: Int, sy: Int) {
+        val nsx = sx.coerceIn(0, MAX_SUBDIV)
+        val nsy = sy.coerceIn(0, MAX_SUBDIV)
+        val newCols = (1 shl nsx) + 1
+        val newRows = (1 shl nsy) + 1
+        resize(newCols, newRows)
+        subdivX = nsx
+        subdivY = nsy
     }
 
     fun resize(newCols: Int, newRows: Int) {
-        if (newCols == cols && newRows == rows) return
+        val nc = newCols.coerceIn(2, (1 shl MAX_SUBDIV) + 1)
+        val nr = newRows.coerceIn(2, (1 shl MAX_SUBDIV) + 1)
+        if (nc == cols && nr == rows) return
         val old = points
-        val oldCols = cols; val oldRows = rows
-        cols = newCols.coerceIn(2, 65)
-        rows = newRows.coerceIn(2, 65)
-        val newPoints = Array(rows) { r -> Array(cols) { c ->
-            val u = if (oldCols > 1) c.toFloat() / (cols - 1) * (oldCols - 1) else 0f
-            val v = if (oldRows > 1) r.toFloat() / (rows - 1) * (oldRows - 1) else 0f
-            val ci = u.toInt().coerceIn(0, oldCols - 2)
-            val ri = v.toInt().coerceIn(0, oldRows - 2)
+        val oc = cols; val or = rows
+        cols = nc; rows = nr
+        points = Array(rows) { r -> Array(cols) { c ->
+            val u = if (oc > 1) c.toFloat() / (cols - 1) * (oc - 1) else 0f
+            val v = if (or > 1) r.toFloat() / (rows - 1) * (or - 1) else 0f
+            val ci = u.toInt().coerceIn(0, oc - 2)
+            val ri = v.toInt().coerceIn(0, or - 2)
             val fu = u - ci; val fv = v - ri
-            val p00 = old[ri][ci]; val p10 = old[ri][(ci + 1).coerceAtMost(oldCols - 1)]
-            val p01 = old[(ri + 1).coerceAtMost(oldRows - 1)][ci]
-            val p11 = old[(ri + 1).coerceAtMost(oldRows - 1)][(ci + 1).coerceAtMost(oldCols - 1)]
+            val p00 = old[ri][ci]; val p10 = old[ri][(ci + 1).coerceAtMost(oc - 1)]
+            val p01 = old[(ri + 1).coerceAtMost(or - 1)][ci]
+            val p11 = old[(ri + 1).coerceAtMost(or - 1)][(ci + 1).coerceAtMost(oc - 1)]
             Point(
-                lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv).coerceIn(0f, 1f),
-                lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv).coerceIn(0f, 1f)
+                lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv),
+                lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
             )
         }}
-        points = newPoints
-        Log.d(TAG, "Resized ${oldCols}x${oldRows} -> ${cols}x${rows}")
+        Log.d(TAG, "Resized ${oc}x${or} -> ${cols}x${rows}")
+    }
+
+    fun reset() {
+        subdivX = 0; subdivY = 0
+        cols = 2; rows = 2
+        points = arrayOf(
+            arrayOf(Point(0f, 0f), Point(1f, 0f)),
+            arrayOf(Point(0f, 1f), Point(1f, 1f))
+        )
     }
 
     fun setPoint(row: Int, col: Int, x: Float, y: Float) {
         if (row in 0 until rows && col in 0 until cols) {
-            points[row][col].x = x.coerceIn(0f, 1f)
-            points[row][col].y = y.coerceIn(0f, 1f)
+            points[row][col] = Point(x, y)
         }
     }
 
@@ -71,24 +85,17 @@ class FusionMesh(
 
     fun warp(uv: Pair<Float, Float>): Pair<Float, Float> {
         val (u, v) = uv
-        val uClamped = u.coerceIn(0f, 1f)
-        val vClamped = v.coerceIn(0f, 1f)
-
-        val colIdx = (uClamped * (cols - 1)).toInt().coerceIn(0, cols - 2)
-        val rowIdx = (vClamped * (rows - 1)).toInt().coerceIn(0, rows - 2)
-
-        val cu = uClamped * (cols - 1) - colIdx
-        val rv = vClamped * (rows - 1) - rowIdx
-
+        val colIdx = (u * (cols - 1)).toInt().coerceIn(0, cols - 2)
+        val rowIdx = (v * (rows - 1)).toInt().coerceIn(0, rows - 2)
+        val cu = u * (cols - 1) - colIdx
+        val rv = v * (rows - 1) - rowIdx
         val p00 = points[rowIdx][colIdx]
         val p10 = points[rowIdx][colIdx + 1]
         val p01 = points[rowIdx + 1][colIdx]
         val p11 = points[rowIdx + 1][colIdx + 1]
-
         val wx = lerp(lerp(p00.x, p10.x, cu), lerp(p01.x, p11.x, cu), rv)
         val wy = lerp(lerp(p00.y, p10.y, cu), lerp(p01.y, p11.y, cu), rv)
-
-        return wx.coerceIn(0f, 1f) to wy.coerceIn(0f, 1f)
+        return wx to wy
     }
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
@@ -125,22 +132,30 @@ class FusionMesh(
         val root = JSONObject()
         root.put("cols", cols)
         root.put("rows", rows)
+        root.put("subdivX", subdivX)
+        root.put("subdivY", subdivY)
         root.put("points", arr)
         return root
     }
 
     fun fromJson(json: JSONObject) {
-        cols = json.optInt("cols", 16)
-        rows = json.optInt("rows", 16)
+        cols = json.optInt("cols", 2)
+        rows = json.optInt("rows", 2)
+        subdivX = json.optInt("subdivX", 0)
+        subdivY = json.optInt("subdivY", 0)
         val arr = json.optJSONArray("points") ?: return
-        for (r in 0 until minOf(arr.length(), rows)) {
-            val rowArr = arr.optJSONArray(r) ?: continue
-            for (c in 0 until minOf(rowArr.length(), cols)) {
-                val obj = rowArr.optJSONObject(c) ?: continue
-                points[r][c].x = obj.optDouble("x", 0.0).toFloat()
-                points[r][c].y = obj.optDouble("y", 0.0).toFloat()
-            }
-        }
+        points = Array(rows) { r -> Array(cols) { c ->
+            if (r < arr.length()) {
+                val rowArr = arr.optJSONArray(r)
+                if (rowArr != null && c < rowArr.length()) {
+                    val obj = rowArr.optJSONObject(c)
+                    if (obj != null) Point(
+                        obj.optDouble("x", 0.0).toFloat(),
+                        obj.optDouble("y", 0.0).toFloat()
+                    ) else Point(0f, 0f)
+                } else Point(0f, 0f)
+            } else Point(0f, 0f)
+        }}
     }
 
     fun copyFrom(other: FusionMesh) {
