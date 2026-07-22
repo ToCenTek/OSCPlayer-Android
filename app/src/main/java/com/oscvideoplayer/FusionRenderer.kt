@@ -64,6 +64,12 @@ void main() {
     private var meshTexId = 0
     private var meshNeedsUpload = true
     private var lastMeshSig = 0
+    @Volatile var surfaceReady: Boolean = false
+        private set
+    @Volatile private var surfaceObj: android.view.Surface? = null
+
+    val videoSurface: android.view.Surface?
+        get() = surfaceObj
 
     private val quad: FloatBuffer = ByteBuffer.allocateDirect(16 * 4)
         .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
@@ -102,6 +108,7 @@ void main() {
         surfaceTexture = SurfaceTexture(surfaceTextureId).apply {
             setOnFrameAvailableListener(this@FusionRenderer)
         }
+        surfaceObj = android.view.Surface(surfaceTexture!!)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
 
         // Create mesh texture
@@ -110,6 +117,7 @@ void main() {
         meshTexId = mIds[0]
 
         onSurfaceCreated(surfaceTexture!!)
+        surfaceReady = true
         Log.d(TAG, "Surface created, tex=$surfaceTextureId")
     }
 
@@ -121,8 +129,12 @@ void main() {
         // Update video frame if available
         if (frameAvailable) {
             frameAvailable = false
-            surfaceTexture?.updateTexImage()
-            surfaceTexture?.getTransformMatrix(stMatrix)
+            try {
+                surfaceTexture?.updateTexImage()
+                surfaceTexture?.getTransformMatrix(stMatrix)
+            } catch (e: Exception) {
+                Log.w(TAG, "updateTexImage: ${e.message}")
+            }
         }
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)

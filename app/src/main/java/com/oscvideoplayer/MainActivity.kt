@@ -156,11 +156,8 @@ class MainActivity : AppCompatActivity() {
         fusionGLView = findViewById(R.id.fusionView)
         fusionRenderer = FusionRenderer(
             meshProvider = { fusionMesh },
-            onSurfaceCreated = { surfaceTexture ->
-                runOnUiThread {
-                    player?.setVideoSurface(android.view.Surface(surfaceTexture))
-                    player?.play()
-                }
+            onSurfaceCreated = { _ ->
+                // GL surface ready; player will pick it up in initializePlayer()
             }
         )
         fusionRenderer?.glSurfaceView = fusionGLView
@@ -606,6 +603,10 @@ class MainActivity : AppCompatActivity() {
                      })
                 }
             playerView?.player = player
+            // Use GL surface for video if fusion renderer is ready
+            if (fusionRenderer?.surfaceReady == true) {
+                player?.setVideoSurface(fusionRenderer?.videoSurface)
+            }
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
             }
@@ -678,17 +679,31 @@ class MainActivity : AppCompatActivity() {
                         override fun reset() { m.reset() }
                         override fun enable(on: Boolean) {
                             Log.d(TAG, "Fusion enable=$on")
+                            _fusionEnabled = on
                             val p = player ?: return
                             runOnUiThread {
                                 if (on) {
                                     fusionGLView?.visibility = android.view.View.VISIBLE
-                                    playerView?.visibility = android.view.View.GONE
-                                    // GL renderer handles video via SurfaceTexture created in onSurfaceCreated
+                                    fusionGLView?.postDelayed({
+                                        val r = fusionRenderer ?: return@postDelayed
+                                        if (!r.surfaceReady) return@postDelayed
+                                        val surf = r.videoSurface ?: return@postDelayed
+                                        playerView?.player = null
+                                        playerView?.visibility = android.view.View.GONE
+                                        p.stop()
+                                        p.setVideoSurface(surf)
+                                        p.prepare()
+                                        p.seekTo(cachedPosition.coerceAtLeast(0))
+                                        p.play()
+                                    }, 300)
                                 } else {
                                     fusionGLView?.visibility = android.view.View.GONE
-                                    playerView?.visibility = android.view.View.VISIBLE
+                                    p.stop()
                                     p.setVideoSurface(null)
+                                    playerView?.visibility = android.view.View.VISIBLE
                                     playerView?.player = p
+                                    p.prepare()
+                                    p.seekTo(cachedPosition)
                                     p.play()
                                 }
                             }
@@ -697,11 +712,17 @@ class MainActivity : AppCompatActivity() {
                         override fun isEnabled() = _fusionEnabled
                         override fun getStateJson(): String {
                             val state = org.json.JSONObject()
-                            state.put("enabled", false)
+                            state.put("enabled", isEnabled())
                             state.put("mesh", m.toJson())
                             val src = org.json.JSONObject()
                             src.put("x", 0); src.put("y", 0); src.put("w", 1); src.put("h", 1)
                             state.put("source", src)
+                            val dm = android.util.DisplayMetrics()
+                            try {
+                                windowManager.defaultDisplay.getRealMetrics(dm)
+                                state.put("displayWidth", dm.widthPixels)
+                                state.put("displayHeight", dm.heightPixels)
+                            } catch (_: Exception) {}
                             return state.toString()
                         }
                     }

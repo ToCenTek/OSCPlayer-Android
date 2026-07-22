@@ -633,7 +633,12 @@ btn.onclick=function(){
         fun getStateJson(): String
     }
 
-    private val fusionApi: FusionAPI? get() = fusionProvider?.invoke()
+    private var _fusionApi: FusionAPI? = null
+    private val fusionApi: FusionAPI?
+        get() {
+            if (_fusionApi == null) _fusionApi = fusionProvider?.invoke()
+            return _fusionApi
+        }
 
     private fun serveFusionEditor(client: Socket) {
         sendResponse(client, 200, "OK", "text/html; charset=utf-8", FusionEditorHtml.HTML)

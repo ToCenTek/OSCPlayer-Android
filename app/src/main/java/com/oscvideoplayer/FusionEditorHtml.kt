@@ -51,7 +51,7 @@ body{background:#0d0d1a;color:#d0d0d0;font-family:system-ui,sans-serif;overflow:
 <script>
 const SC=document.getElementById('srcCanvas'),OC=document.getElementById('outCanvas')
 const SX=SC.getContext('2d'),OX=OC.getContext('2d')
-let mesh=null, src={x:0,y:0,w:1,h:1}, en=false
+let mesh=null, src={x:0,y:0,w:1,h:1}, en=false, aspect=16/9
 let sel=new Set(), cr=1, cc=1
 let z=1, px=0, py=0, drag=null, start=null
 
@@ -75,6 +75,7 @@ async function load(){
       document.getElementById('subdivX').textContent=s.mesh.subdivX||0
       document.getElementById('subdivY').textContent=s.mesh.subdivY||0
     }
+    if(s.displayWidth&&s.displayHeight){aspect=s.displayWidth/s.displayHeight}
     if(s.source) src=s.source
     document.getElementById('sConn').className='ok'; document.getElementById('sConn').textContent='● 已连接'
     draw()
@@ -109,8 +110,8 @@ function drawSrc(){
 function drawOut(){
   const w=OC.width,h=OC.height
   OX.fillStyle='#0a0a18';OX.fillRect(0,0,w,h)
-  // output area (black)
-  const aw=w*0.85,ah=aw*h/w
+  // output area matching display aspect ratio
+  const aw=w*0.85,ah=aw/aspect
   const ox0=(w-aw)/2,oy0=(h-ah)/2
   OX.fillStyle='#000';OX.fillRect(ox0,oy0,aw,ah)
   OX.strokeStyle='#333';OX.lineWidth=1;OX.strokeRect(ox0,oy0,aw,ah)
@@ -172,7 +173,7 @@ function updateStatus(){
 function findPt(cx,cy){
   if(!mesh)return null
   let best=null,bd=Infinity
-  const aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+  const aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
   for(let r=0;r<mesh.rows;r++)for(let c=0;c<mesh.cols;c++){
     const p=mesh.points[r][c],sx=ox0+p.x*aw,sy=oy0+p.y*ah
     const d=(cx-sx)**2+(cy-sy)**2
@@ -205,14 +206,14 @@ OC.addEventListener('mousedown',e=>{
 
 OC.addEventListener('mousemove',e=>{
   const r=OC.getBoundingClientRect(),mx=(e.clientX-r.left)*OC.width/r.width,my=(e.clientY-r.top)*OC.height/r.height
-  if(drag==='pt'&&mesh&&dragOrigins){const aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+  if(drag==='pt'&&mesh&&dragOrigins){const aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
     const dx=(mx-dragOrigins.mx)/aw,dy=(my-dragOrigins.my)/ah
     for(const k of sel){const o=dragOrigins.pts[k];if(o){const rc=k.split(',');mesh.points[+rc[0]][+rc[1]].x=o.x+dx;mesh.points[+rc[0]][+rc[1]].y=o.y+dy}}
     draw()
   }
   if(drag==='pan'){px+=(e.clientX-start.x)/10;py+=(e.clientY-start.y)/10;start={x:e.clientX,y:e.clientY};draw()}
   if(drag==='box'){start=start||{x:mx,y:my};draw()
-    const aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+    const aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
     OX.strokeStyle='rgba(255,255,100,0.5)';OX.lineWidth=1;OX.setLineDash([3,3])
     OX.strokeRect(Math.min(start.x,mx),Math.min(start.y,my),Math.abs(mx-start.x),Math.abs(my-start.y))
     OX.setLineDash([])
@@ -221,7 +222,7 @@ OC.addEventListener('mousemove',e=>{
 
 OC.addEventListener('mouseup',e=>{
   if(drag==='box'&&start){const r=OC.getBoundingClientRect(),mx=(e.clientX-r.left)*OC.width/r.width,my=(e.clientY-r.top)*OC.height/r.height
-    const x1=Math.min(start.x,mx),x2=Math.max(start.x,mx),y1=Math.min(start.y,my),y2=Math.max(start.y,my),aw=OC.width*0.85,ah=aw*OC.height/OC.width,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+    const x1=Math.min(start.x,mx),x2=Math.max(start.x,mx),y1=Math.min(start.y,my),y2=Math.max(start.y,my),aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
     if(x2-x1>3||y2-y1>3){sel.clear()
       for(let r=0;r<mesh.rows;r++)for(let c=0;c<mesh.cols;c++){const px=ox0+mesh.points[r][c].x*aw,py=oy0+mesh.points[r][c].y*ah;if(px>=x1&&px<=x2&&py>=y1&&py<=y2)sel.add(r+','+c)}
     }else{sel.clear();sel.add(cr+','+cc)}
