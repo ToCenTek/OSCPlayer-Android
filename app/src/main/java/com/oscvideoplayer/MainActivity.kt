@@ -655,6 +655,7 @@ class MainActivity : AppCompatActivity() {
                     object : HttpUploadServer.FusionAPI {
                         override fun getJson() = m.toJson().toString()
                         override fun setPoint(row: Int, col: Int, x: Float, y: Float) { m.setPoint(row, col, x, y) }
+                        override fun resize(cols: Int, rows: Int) { m.resize(cols, rows) }
                         override fun regularize() { m.regularize() }
                         override fun reset() { m.reset() }
                         override fun enable(on: Boolean) { Log.d(TAG, "Fusion enable=$on") }
@@ -663,6 +664,9 @@ class MainActivity : AppCompatActivity() {
                             val state = org.json.JSONObject()
                             state.put("enabled", false)
                             state.put("mesh", m.toJson())
+                            val src = org.json.JSONObject()
+                            src.put("x", 0); src.put("y", 0); src.put("w", 1); src.put("h", 1)
+                            state.put("source", src)
                             return state.toString()
                         }
                     }

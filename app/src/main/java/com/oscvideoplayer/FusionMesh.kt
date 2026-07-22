@@ -14,12 +14,13 @@ class FusionMesh(
 
     data class Point(var x: Float, var y: Float)
 
-    val points: Array<Array<Point>> = Array(rows) { r ->
+    var points: Array<Array<Point>> = Array(rows) { r ->
         Array(cols) { c ->
             Point(c.toFloat() / (cols - 1).coerceAtLeast(1),
                   r.toFloat() / (rows - 1).coerceAtLeast(1))
         }
     }
+        private set
 
     fun reset() {
         for (r in 0 until rows) {
@@ -28,6 +29,30 @@ class FusionMesh(
                 points[r][c].y = r.toFloat() / (rows - 1).coerceAtLeast(1)
             }
         }
+    }
+
+    fun resize(newCols: Int, newRows: Int) {
+        if (newCols == cols && newRows == rows) return
+        val old = points
+        val oldCols = cols; val oldRows = rows
+        cols = newCols.coerceIn(2, 65)
+        rows = newRows.coerceIn(2, 65)
+        val newPoints = Array(rows) { r -> Array(cols) { c ->
+            val u = if (oldCols > 1) c.toFloat() / (cols - 1) * (oldCols - 1) else 0f
+            val v = if (oldRows > 1) r.toFloat() / (rows - 1) * (oldRows - 1) else 0f
+            val ci = u.toInt().coerceIn(0, oldCols - 2)
+            val ri = v.toInt().coerceIn(0, oldRows - 2)
+            val fu = u - ci; val fv = v - ri
+            val p00 = old[ri][ci]; val p10 = old[ri][(ci + 1).coerceAtMost(oldCols - 1)]
+            val p01 = old[(ri + 1).coerceAtMost(oldRows - 1)][ci]
+            val p11 = old[(ri + 1).coerceAtMost(oldRows - 1)][(ci + 1).coerceAtMost(oldCols - 1)]
+            Point(
+                lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv).coerceIn(0f, 1f),
+                lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv).coerceIn(0f, 1f)
+            )
+        }}
+        points = newPoints
+        Log.d(TAG, "Resized ${oldCols}x${oldRows} -> ${cols}x${rows}")
     }
 
     fun setPoint(row: Int, col: Int, x: Float, y: Float) {

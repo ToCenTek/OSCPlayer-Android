@@ -624,6 +624,7 @@ btn.onclick=function(){
     interface FusionAPI {
         fun getJson(): String
         fun setPoint(row: Int, col: Int, x: Float, y: Float)
+        fun resize(cols: Int, rows: Int)
         fun regularize()
         fun reset()
         fun enable(on: Boolean)
@@ -634,7 +635,7 @@ btn.onclick=function(){
     private val fusionApi: FusionAPI? get() = fusionProvider?.invoke()
 
     private fun serveFusionEditor(client: Socket) {
-        sendResponse(client, 200, "OK", "text/html; charset=utf-8", FUSION_EDITOR_HTML)
+        sendResponse(client, 200, "OK", "text/html; charset=utf-8", FusionEditorHtml.HTML)
     }
 
     private fun handleFusionApi(client: Socket, method: String, path: String, input: java.io.InputStream, contentLength: Long) {
@@ -658,6 +659,21 @@ btn.onclick=function(){
                                 val y = json.getDouble("y").toFloat()
                                 api.setPoint(row, col, x, y)
                                 sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
+                            }
+                            "set_multi" -> {
+                                val pts = json.getJSONArray("points")
+                                for (i in 0 until pts.length()) {
+                                    val p = pts.getJSONObject(i)
+                                    api.setPoint(p.getInt("row"), p.getInt("col"),
+                                        p.getDouble("x").toFloat(), p.getDouble("y").toFloat())
+                                }
+                                sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
+                            }
+                            "resize" -> {
+                                val newCols = json.optInt("cols", 9).coerceIn(2, 65)
+                                val newRows = json.optInt("rows", 9).coerceIn(2, 65)
+                                api.resize(newCols, newRows)
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
                             }
                             "regularize" -> {
                                 api.regularize()
@@ -703,323 +719,5 @@ btn.onclick=function(){
     }
 
     companion object {
-        private val FUSION_EDITOR_HTML = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>投影融合校准</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; padding: 16px; }
-  h1 { font-size: 18px; margin-bottom: 12px; color: #00d4ff; }
-  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
-  .toolbar button { background: #16213e; color: #eee; border: 1px solid #0f3460; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-  .toolbar button:hover { background: #0f3460; }
-  .toolbar button.active { background: #00d4ff; color: #1a1a2e; }
-  .toolbar label { font-size: 13px; color: #aaa; }
-  .toolbar input[type=number] { background: #16213e; color: #eee; border: 1px solid #0f3460; padding: 4px 6px; border-radius: 4px; width: 60px; font-size: 13px; }
-  canvas { border: 1px solid #333; background: #0d0d1a; cursor: crosshair; display: block; max-width: 100%; }
-  .info { margin-top: 8px; font-size: 12px; color: #888; }
-  .status { color: #0f0; }
-</style>
-</head>
-<body>
-<h1>🔲 投影融合校准</h1>
-<div class="toolbar">
-  <button id="btnEnable" onclick="toggleEnable()">开启融合</button>
-  <button onclick="regularize()">均匀化</button>
-  <button onclick="resetMesh()">重置网格</button>
-  <button onclick="loadState()">刷新</button>
-  <label>网格: <input type="number" id="meshRows" value="9" min="3" max="33">×<input type="number" id="meshCols" value="9" min="3" max="33"></label>
-  <button onclick="resizeMesh()">应用</button>
-  <label id="statusLabel" class="status">● 未连接</label>
-</div>
-<canvas id="canvas"></canvas>
-<div class="info" id="info">拖动控制点调整网格 | 滚轮缩放 | 右键拖拽平移</div>
-
-<script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const statusLabel = document.getElementById('statusLabel');
-
-let mesh = null;
-let dragging = null;
-let scale = 1, offsetX = 0, offsetY = 0;
-let enabled = false;
-const POINT_RADIUS = 5;
-const MIN_CELL = 8;
-
-function resizeCanvas() {
-  const w = canvas.parentElement.clientWidth - 32;
-  canvas.width = Math.min(w, 1200);
-  canvas.height = Math.round(canvas.width * 0.5625);
-}
-resizeCanvas();
-window.addEventListener('resize', resizeCanvas);
-
-async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
-  return res.json();
-}
-
-async function loadState() {
-  try {
-    const state = await api('/fusion/api/state');
-    enabled = state.enabled;
-    document.getElementById('btnEnable').textContent = enabled ? '关闭融合' : '开启融合';
-    document.getElementById('btnEnable').className = enabled ? 'active' : '';
-    mesh = state.mesh;
-    document.getElementById('meshRows').value = mesh.rows;
-    document.getElementById('meshCols').value = mesh.cols;
-    statusLabel.textContent = '● 已连接';
-    statusLabel.style.color = '#0f0';
-    draw();
-  } catch (e) {
-    statusLabel.textContent = '● 连接失败';
-    statusLabel.style.color = '#f00';
-  }
-}
-
-async function toggleEnable() {
-  const state = await api('/fusion/api/enable', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({enable: !enabled})
-  });
-  enabled = state.enabled;
-  document.getElementById('btnEnable').textContent = enabled ? '关闭融合' : '开启融合';
-  document.getElementById('btnEnable').className = enabled ? 'active' : '';
-}
-
-async function setPoint(row, col, x, y) {
-  await api('/fusion/api/mesh', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'set', row, col, x, y})
-  });
-}
-
-async function regularize() {
-  const result = await api('/fusion/api/mesh', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'regularize'})
-  });
-  mesh = result;
-  draw();
-}
-
-async function resetMesh() {
-  const result = await api('/fusion/api/mesh', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'reset'})
-  });
-  mesh = result;
-  draw();
-}
-
-async function resizeMesh() {
-  // mesh resize not yet implemented; reset with new size
-  await resetMesh();
-}
-
-function canvasToMesh(cx, cy) {
-  const x = (cx / canvas.width - offsetX) / scale;
-  const y = (cy / canvas.height - offsetY) / scale;
-  return {x: x.toFixed(4), y: y.toFixed(4)};
-}
-
-function meshToCanvas(mx, my) {
-  return {
-    x: (mx * scale + offsetX) * canvas.width,
-    y: (my * scale + offsetY) * canvas.height
-  };
-}
-
-function findPoint(cx, cy) {
-  if (!mesh) return null;
-  for (let r = 0; r < mesh.rows; r++) {
-    for (let c = 0; c < mesh.cols; c++) {
-      const p = mesh.points[r][c];
-      const {x: px, y: py} = meshToCanvas(p.x, p.y);
-      const dx = cx - px, dy = cy - py;
-      if (dx * dx + dy * dy < POINT_RADIUS * POINT_RADIUS * 4) {
-        return {row: r, col: c};
-      }
-    }
-  }
-  return null;
-}
-
-function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!mesh) return;
-
-  const {rows, cols, points} = mesh;
-  const w = canvas.width, h = canvas.height;
-
-  // Draw mesh cells with blend preview
-  for (let r = 0; r < rows - 1; r++) {
-    for (let c = 0; c < cols - 1; c++) {
-      const p00 = meshToCanvas(points[r][c].x, points[r][c].y);
-      const p10 = meshToCanvas(points[r][c+1].x, points[r][c+1].y);
-      const p01 = meshToCanvas(points[r+1][c].x, points[r+1][c].y);
-      const p11 = meshToCanvas(points[r+1][c+1].x, points[r+1][c+1].y);
-
-      ctx.beginPath();
-      ctx.moveTo(p00.x, p00.y);
-      ctx.lineTo(p10.x, p10.y);
-      ctx.lineTo(p11.x, p11.y);
-      ctx.lineTo(p01.x, p01.y);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(0, 100, 200, 0.05)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-  }
-
-  // Draw grid lines
-  ctx.strokeStyle = 'rgba(0, 212, 255, 0.4)';
-  ctx.lineWidth = 1;
-  for (let r = 0; r < rows; r++) {
-    ctx.beginPath();
-    const start = meshToCanvas(points[r][0].x, points[r][0].y);
-    ctx.moveTo(start.x, start.y);
-    for (let c = 1; c < cols; c++) {
-      const p = meshToCanvas(points[r][c].x, points[r][c].y);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-  }
-  for (let c = 0; c < cols; c++) {
-    ctx.beginPath();
-    const start = meshToCanvas(points[0][c].x, points[0][c].y);
-    ctx.moveTo(start.x, start.y);
-    for (let r = 1; r < rows; r++) {
-      const p = meshToCanvas(points[r][c].x, points[r][c].y);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-  }
-
-  // Draw control points
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const p = meshToCanvas(points[r][c].x, points[r][c].y);
-      const isDragging = dragging && dragging.row === r && dragging.col === c;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, POINT_RADIUS, 0, Math.PI * 2);
-      ctx.fillStyle = isDragging ? '#ff0' : (r === 0 || r === rows-1 || c === 0 || c === cols-1) ? '#f80' : '#0df';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-  }
-
-  // Draw center cross
-  const cx = canvas.width / 2, cy = canvas.height / 2;
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
-  ctx.beginPath(); ctx.moveTo(cx - 20, cy); ctx.lineTo(cx + 20, cy); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(cx, cy - 20); ctx.lineTo(cx, cy + 20); ctx.stroke();
-  ctx.setLineDash([]);
-}
-
-// Mouse events
-let mouseDown = null;
-canvas.addEventListener('mousedown', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const cy = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-  const hit = findPoint(cx, cy);
-  if (hit) {
-    dragging = hit;
-    mouseDown = {x: cx, y: cy, row: hit.row, col: hit.col};
-    return;
-  }
-  mouseDown = {x: cx, y: cy, drag: false};
-});
-
-canvas.addEventListener('mousemove', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const cx = (e.clientX - rect.left) * (canvas.width / rect.width);
-  const cy = (e.clientY - rect.top) * (canvas.height / rect.height);
-
-  if (dragging && mesh) {
-    const {x, y} = canvasToMesh(cx, cy);
-    mesh.points[dragging.row][dragging.col].x = parseFloat(x);
-    mesh.points[dragging.row][dragging.col].y = parseFloat(y);
-    setPoint(dragging.row, dragging.col, parseFloat(x), parseFloat(y));
-    draw();
-  } else {
-    const hit = findPoint(cx, cy);
-    canvas.style.cursor = hit ? 'pointer' : 'crosshair';
-  }
-});
-
-canvas.addEventListener('mouseup', () => {
-  dragging = null;
-  mouseDown = null;
-});
-
-canvas.addEventListener('mouseleave', () => {
-  dragging = null;
-});
-
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const delta = e.deltaY > 0 ? 0.9 : 1.1;
-  const rect = canvas.getBoundingClientRect();
-  const mx = (e.clientX - rect.left) / rect.width;
-  const my = (e.clientY - rect.top) / rect.height;
-  scale *= delta;
-  scale = Math.max(0.5, Math.min(5, scale));
-  offsetX = mx * (1 - delta) + offsetX * delta;
-  offsetY = my * (1 - delta) + offsetY * delta;
-  draw();
-});
-
-// Touch support
-let touchDrag = null;
-canvas.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  const t = e.touches[0];
-  const rect = canvas.getBoundingClientRect();
-  const cx = (t.clientX - rect.left) * (canvas.width / rect.width);
-  const cy = (t.clientY - rect.top) * (canvas.height / rect.height);
-  const hit = findPoint(cx, cy);
-  if (hit) dragging = hit;
-});
-
-canvas.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  if (!dragging || !mesh) return;
-  const t = e.touches[0];
-  const rect = canvas.getBoundingClientRect();
-  const cx = (t.clientX - rect.left) * (canvas.width / rect.width);
-  const cy = (t.clientY - rect.top) * (canvas.height / rect.height);
-  const {x, y} = canvasToMesh(cx, cy);
-  mesh.points[dragging.row][dragging.col].x = parseFloat(x);
-  mesh.points[dragging.row][dragging.col].y = parseFloat(y);
-  setPoint(dragging.row, dragging.col, parseFloat(x), parseFloat(y));
-  draw();
-});
-
-canvas.addEventListener('touchend', () => { dragging = null; });
-
-loadState();
-setInterval(loadState, 5000);
-</script>
-</body>
-</html>
-        """.trimIndent()
     }
 }
