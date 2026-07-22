@@ -222,8 +222,6 @@ class MainActivity : AppCompatActivity() {
 
         startHttpUploadServer()
 
-        tryAutoSetDefaultLauncher()
-
         isLoopEnabled = prefs.getBoolean(KEY_LOOP_ENABLED, true)
         showSpeedToast = prefs.getBoolean(KEY_SPEED_TOAST, true)
         stereoMode = prefs.getString(KEY_STEREO_MODE, "off") ?: "off"
@@ -702,6 +700,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPositionUpdater() {
         positionUpdaterJob?.cancel()
+        if (!getHeartbeatEnabled()) return
+        val interval = getHeartbeatInterval() * 1000L
         positionUpdaterJob = lifecycleScope.launch {
             while (isActive) {
                 val p = player
@@ -709,7 +709,6 @@ class MainActivity : AppCompatActivity() {
                     cachedPosition = p.currentPosition
                     cachedIsPlaying = p.isPlaying
                     cachedVolume = p.volume
-                    // periodic heartbeat for sync monitoring
                     hb("periodic")
                     try {
                         val am = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
@@ -732,9 +731,14 @@ class MainActivity : AppCompatActivity() {
                     val text = "$state\nRendering resolution: ${w}x${h}\nRendering frame rate: ${"%.2f".format(fps)}fps"
                     findViewById<android.widget.TextView>(com.oscvideoplayer.R.id.debugOverlay)?.text = text
                 }
-                kotlinx.coroutines.delay(1000)
+                kotlinx.coroutines.delay(interval)
             }
         }
+    }
+
+    private fun stopPositionUpdater() {
+        positionUpdaterJob?.cancel()
+        positionUpdaterJob = null
     }
 
     private fun recoverFromError() {
@@ -1229,6 +1233,23 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "Keepalive workmanager set to ${m}min")
     }
 
+    fun getHeartbeatEnabled(): Boolean = prefs?.getBoolean("heartbeat_enabled", true) ?: true
+
+    fun setHeartbeatEnabled(on: Boolean) {
+        prefs?.edit()?.putBoolean("heartbeat_enabled", on)?.apply()
+        if (on) startPositionUpdater() else stopPositionUpdater()
+        Log.d(TAG, "Heartbeat ${if (on) "enabled" else "disabled"}")
+    }
+
+    fun getHeartbeatInterval(): Int = prefs?.getInt("heartbeat_interval_seconds", 1) ?: 1
+
+    fun setHeartbeatInterval(seconds: Int) {
+        val s = seconds.coerceIn(1, 60)
+        prefs?.edit()?.putInt("heartbeat_interval_seconds", s)?.apply()
+        if (getHeartbeatEnabled()) startPositionUpdater()
+        Log.d(TAG, "Heartbeat interval set to ${s}s")
+    }
+
     fun restartPlayer() {
         runOnUiThread {
             val path = currentVideoPath ?: return@runOnUiThread
@@ -1375,7 +1396,7 @@ class MainActivity : AppCompatActivity() {
                 val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
                 if (currentMinutes == target) {
                     powerShutdownTime = null
-                    Thread { Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot -p")) }.start()
+                    Thread { Runtime.getRuntime().exec(arrayOf("/system/bin/reboot", "-p")) }.start()
                 }
             }
         }
@@ -1386,14 +1407,14 @@ class MainActivity : AppCompatActivity() {
                 val target = parts[0].toIntOrNull()?.times(60)?.plus(parts[1].toIntOrNull() ?: 0) ?: return
                 if (currentMinutes == target) {
                     powerRebootTime = null
-                    Thread { Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot")) }.start()
+                    Thread { Runtime.getRuntime().exec(arrayOf("/system/bin/reboot")) }.start()
                 }
             }
         }
     }
 
     private fun suExec(cmd: String): Boolean = try {
-        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        val p = Runtime.getRuntime().exec(arrayOf("/system/xbin/su", "-c", cmd))
         p.waitFor() == 0
     } catch (_: Exception) { false }
 
@@ -1448,7 +1469,10 @@ class MainActivity : AppCompatActivity() {
     fun schedulePowerClear() {
         powerOnTime = null
         powerOffTime = null
-        prefs.edit().remove(KEY_POWER_ON).remove(KEY_POWER_OFF).apply()
+        powerShutdownTime = null
+        powerRebootTime = null
+        prefs.edit().remove(KEY_POWER_ON).remove(KEY_POWER_OFF)
+            .remove(KEY_POWER_SHUTDOWN).remove(KEY_POWER_REBOOT).apply()
         Log.d(TAG, "Power schedule cleared")
     }
 
@@ -1516,6 +1540,16 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Return to launcher failed: ${e.message}")
+        }
+    }
+
+    fun openSystemSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Open system settings failed: ${e.message}")
         }
     }
 
@@ -1737,8 +1771,8 @@ class MainActivity : AppCompatActivity() {
             "电源管理",
             "显示模式",
             "显示信息",
-            "设为默认桌面",
             "返回系统桌面",
+            "系统设置界面",
             "恢复默认设置",
             "调试信息",
             if (isSurface) "▸ 性能模式" else "▸ 调试模式",
@@ -1764,8 +1798,8 @@ class MainActivity : AppCompatActivity() {
                 3 -> showPowerMenu()
                 4 -> showColorModeMenu()
                 5 -> showDisplayInfoDialog()
-                6 -> showSetDefaultLauncherDialog()
-                7 -> returnToSystemLauncher()
+                6 -> returnToSystemLauncher()
+                7 -> openSystemSettings()
                 8 -> showResetSettingsDialog()
                 9 -> {
                     toggleDebugOverlay()
@@ -1920,40 +1954,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "已恢复默认设置", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun setAsDefaultLauncher() {
-        try {
-            val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) }
-            startActivity(intent)
-            Toast.makeText(this, "请选择OSCVideoPlayer并设为默认", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Log.e(TAG, "Set default failed: ${e.message}")
-        }
-    }
-
-    private fun tryAutoSetDefaultLauncher(): Boolean {
-        try {
-            Runtime.getRuntime().exec(arrayOf(
-                "cmd", "role", "add-role-holder",
-                "android.app.role.HOME", packageName
-            )).waitFor()
-            Log.d(TAG, "Auto-set default launcher via cmd role")
-            return true
-        } catch (_: Exception) {}
-
-        return false
-    }
-
-    private fun showSetDefaultLauncherDialog() {
-        if (tryAutoSetDefaultLauncher()) return
-
-        android.app.AlertDialog.Builder(this)
-            .setTitle("设为默认桌面")
-            .setMessage("是否将OSCVideoPlayer设为默认桌面？\n\n设为默认后，电视开机将自动启动本应用。\n\n选择\"设为默认\"后，在弹出的界面中选择OSCVideoPlayer，并勾选\"默认\"。")
-            .setPositiveButton("设为默认") { _, _ -> setAsDefaultLauncher() }
-            .setNegativeButton("稍后再说", null)
             .show()
     }
 

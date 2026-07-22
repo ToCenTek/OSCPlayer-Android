@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace 'com.oscvideoplayer'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.oscvideoplayer"
@@ -50,12 +50,12 @@ android {
 
 dependencies {
     // ExoPlayer (Media3) with extensions
-    implementation 'androidx.media3:media3-exoplayer:1.5.2'
-    implementation 'androidx.media3:media3-ui:1.5.2'
-    implementation 'androidx.media3:media3-exoplayer-hls:1.5.2'
-    implementation 'androidx.media3:media3-exoplayer-dash:1.5.2'
-    implementation 'androidx.media3:media3-exoplayer-smoothstreaming:1.5.2'
-    implementation 'androidx.media3:media3-exoplayer-rtsp:1.5.2'
+    implementation 'androidx.media3:media3-exoplayer:1.7.1'
+    implementation 'androidx.media3:media3-ui:1.7.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.7.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.7.1'
+    implementation 'androidx.media3:media3-exoplayer-smoothstreaming:1.7.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.7.1'
 
     // Kotlin & AndroidX
     implementation 'androidx.core:core-ktx:1.12.0'

@@ -95,8 +95,8 @@ Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 | 地址 | 参数 | 说明 |
 |------|------|------|
 | `/config/dir` | 字符串: 路径 | 设置默认目录 |
-| `/config/watchdog` | 整数: 0/1 | 开关看门狗 |
-| `/config/heartbeat` | - | 看门狗心跳 |
+| `/config/watchdog` | 整数: 0/1 | 开关播放卡顿检测 (30秒检查, 60秒卡住=卡顿) |
+| `/config/heartbeat` | `[0|1][/<秒>]` | 开关心跳上报, 可选设置上报间隔秒数(默认1秒) |
 | `/config/reload` | - | 重新扫描视频 |
 | `/config/surface` | 整数: 0/1 | 0=调试模式(TextureView), 1=性能模式(SurfaceView) |
 | `/config/keepalive/alarm` | 整数: 秒 | AlarmReceiver 间隔 |
@@ -158,6 +158,34 @@ brew install scrcpy
 # 连接节点后启动
 adb connect 10.0.0.92:5555
 scrcpy
+
+# 常用选项:
+scrcpy --max-size 1024          # 限制分辨率, 减少卡顿
+scrcpy --bit-rate 4M            # 限制码率
+scrcpy --max-fps 15             # 限制帧率 (无线调试推荐)
+scrcpy --turn-screen-off        # 镜像时关闭节点屏幕
+scrcpy --stay-awake             # 防止节点休眠
+scrcpy --window-title "Y8 #1"   # 多节点时区分窗口
+
+# 多节点同时控制 (开两个终端)
+scrcpy --window-title "Box 92" --max-size 800  # 第一个
+scrcpy --serial 10.0.0.45:5555 --window-title "Box 45" --max-size 800  # 第二个
 ```
 
 用鼠标就能操作播放器菜单、设置、搜索等一切功能, 配合 ADB 无线调试, 开发调试非常方便. 注意 texture_view 模式下 scrcpy 才能看到画面 (系统设置中切换).
+
+## FAQ
+
+### 开机自启?
+
+播放器有 `BootReceiver` 监听系统开机广播, 会自动启动. 不需要设为桌面应用.
+
+播放器已从 `CATEGORY_HOME` 移除, 不再是桌面应用, 所以开机不会再弹出"选择主屏幕应用".
+
+### 能删掉当贝桌面吗?
+
+不推荐. 当贝桌面是进入系统设置的入口. 删除后可通过以下方式进入系统设置:
+
+- **OSC 命令**: `/settings` 直接打开 Android 系统设置
+- **播放器菜单**: `系统设置 -> 系统设置界面`
+- **ADB**: `adb shell am start -a android.settings.SETTINGS`

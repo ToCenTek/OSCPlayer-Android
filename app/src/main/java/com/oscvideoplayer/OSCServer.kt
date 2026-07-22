@@ -636,8 +636,14 @@ class OSCServer(
                         }
                     }
                     "heartbeat" -> {
-                        mainActivity?.watchdogPing()
-                        response = OSCMessage("/Config", listOf("heartbeat"))
+                        val on = if (value.isNotEmpty()) value.toIntOrNull() ?: 1
+                        else (msg.args.getOrNull(0) as? Number)?.toInt() ?: 1
+                        val interval = (msg.args.getOrNull(1) as? Number)?.toInt() ?: -1
+                        if (interval > 0) {
+                            mainActivity?.setHeartbeatInterval(interval)
+                        }
+                        mainActivity?.setHeartbeatEnabled(on != 0)
+                        response = OSCMessage("/Config", listOf("heartbeat=${if (on != 0) "on" else "off"},interval=${mainActivity?.getHeartbeatInterval() ?: 1}s"))
                     }
                     "watchdog" -> {
                         val enable = if (value.isNotEmpty()) value.toIntOrNull() ?: 1
@@ -696,6 +702,11 @@ class OSCServer(
                                 } else {
                                     response = OSCMessage("/Config", listOf("keepalive_workmanager=${mainActivity?.getKeepaliveWorkmanager() ?: 30}min"))
                                 }
+                            }
+                            sub == "check" -> {
+                                val alarm = mainActivity?.getKeepaliveAlarm() ?: 60
+                                val wm = mainActivity?.getKeepaliveWorkmanager() ?: 30
+                                response = OSCMessage("/Config", listOf("keepalive_alarm=${alarm}s  keepalive_workmanager=${wm}min"))
                             }
                             else -> {
                                 val alarm = mainActivity?.getKeepaliveAlarm() ?: 60
@@ -775,6 +786,9 @@ class OSCServer(
                     else -> response = OSCMessage("/Schedule", listOf(mainActivity?.getScheduleStatus() ?: "no schedule"))
                 }
             }
+
+            "reboot" -> { sendReboot(); return }
+            "shutdown" -> { sendShutdown(); return }
 
             "power" -> {
                 val sub = parts.getOrNull(1) ?: ""
@@ -873,8 +887,8 @@ class OSCServer(
                     appendLine("  /fps/set/rate       Set FPS")
                     appendLine("Config:")
                     appendLine("  /config/dir[/path]  Get/set default dir")
-                    appendLine("  /config/watchdog[/0|1]  Toggle watchdog")
-                    appendLine("  /config/heartbeat   Ping watchdog")
+                    appendLine("  /config/heartbeat[/0|1][/N]  Toggle heartbeat (0/1), set interval (N sec)")
+                    appendLine("  /config/watchdog 0|1             Toggle watchdog")
                     appendLine("  /config/reload      Rescan videos")
                     appendLine("  /config/startup/name  Set startup video")
                     appendLine("  /config/display/mode/N  Set color mode")
@@ -889,7 +903,9 @@ class OSCServer(
                     appendLine("  /power/exit           Exit app")
                     appendLine("  /power/shutdown       Shutdown device")
                     appendLine("  /power/reboot         Reboot device")
-                    appendLine("  /power/schedule/on|off/HH:mm")
+                    appendLine("  /reboot               Alias for /power/reboot")
+                    appendLine("  /shutdown             Alias for /power/shutdown")
+                    appendLine("  /power/schedule/on|off|shutdown|reboot|clear/HH:mm")
                     appendLine("File:")
                     appendLine("  /rm/name              Delete video")
                     appendLine("  /rename/old/new       Rename video")
@@ -897,8 +913,9 @@ class OSCServer(
                     appendLine("  /cp/tointernal/name   Copy video from USB")
                     appendLine("  /port/name/port       Set reply port")
                     appendLine("  /help                 Show this help")
-                    appendLine("System:")
-                    appendLine("  /launcher             Return to system launcher")
+            appendLine("System:")
+            appendLine("  /launcher             Return to system launcher")
+            appendLine("  /settings             Open system settings")
                 }
                 response = OSCMessage("/Help", listOf(helpText))
             }
@@ -906,6 +923,11 @@ class OSCServer(
             "launcher" -> {
                 mainActivity?.returnToSystemLauncher()
                 response = OSCMessage("/Launcher", listOf("ok"))
+            }
+
+            "settings" -> {
+                mainActivity?.openSystemSettings()
+                response = OSCMessage("/Settings", listOf("ok"))
             }
 
             else -> {
@@ -918,7 +940,7 @@ class OSCServer(
 
     private fun sendShutdown() {
         try {
-            Runtime.getRuntime().exec("su -c 'reboot -p'")
+            Runtime.getRuntime().exec(arrayOf("/system/bin/reboot", "-p"))
             Log.d(TAG, "Shutdown command sent")
         } catch (e: Exception) {
             Log.e(TAG, "Shutdown failed: ${e.message}")
@@ -927,7 +949,7 @@ class OSCServer(
 
     private fun sendReboot() {
         try {
-            Runtime.getRuntime().exec("su -c 'reboot'")
+            Runtime.getRuntime().exec(arrayOf("/system/bin/reboot"))
             Log.d(TAG, "Reboot command sent")
         } catch (e: Exception) {
             Log.e(TAG, "Reboot failed: ${e.message}")
