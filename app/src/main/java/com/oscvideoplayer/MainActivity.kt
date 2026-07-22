@@ -48,6 +48,8 @@ class MainActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
+    private var fusionGLView: android.opengl.GLSurfaceView? = null
+    private var fusionRenderer: FusionRenderer? = null
     private var isInitialized = false
     private var oscServer: OSCServer? = null
     private var videoScanner: VideoScanner? = null
@@ -150,6 +152,21 @@ class MainActivity : AppCompatActivity() {
             inflatePlayerView()
             playerView = findViewById(R.id.playerView)
         }
+
+        fusionGLView = findViewById(R.id.fusionView)
+        fusionRenderer = FusionRenderer(
+            meshProvider = { fusionMesh },
+            onSurfaceCreated = { surfaceTexture ->
+                runOnUiThread {
+                    player?.setVideoSurface(android.view.Surface(surfaceTexture))
+                    player?.play()
+                }
+            }
+        )
+        fusionRenderer?.glSurfaceView = fusionGLView
+        fusionGLView?.setEGLContextClientVersion(2)
+        fusionGLView?.setRenderer(fusionRenderer)
+        fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_WHEN_DIRTY
 
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
@@ -659,8 +676,25 @@ class MainActivity : AppCompatActivity() {
                         override fun setSubdiv(sx: Int, sy: Int) { m.setSubdiv(sx, sy) }
                         override fun regularize() { m.regularize() }
                         override fun reset() { m.reset() }
-                        override fun enable(on: Boolean) { Log.d(TAG, "Fusion enable=$on") }
-                        override fun isEnabled() = false
+                        override fun enable(on: Boolean) {
+                            Log.d(TAG, "Fusion enable=$on")
+                            val p = player ?: return
+                            runOnUiThread {
+                                if (on) {
+                                    fusionGLView?.visibility = android.view.View.VISIBLE
+                                    playerView?.visibility = android.view.View.GONE
+                                    // GL renderer handles video via SurfaceTexture created in onSurfaceCreated
+                                } else {
+                                    fusionGLView?.visibility = android.view.View.GONE
+                                    playerView?.visibility = android.view.View.VISIBLE
+                                    p.setVideoSurface(null)
+                                    playerView?.player = p
+                                    p.play()
+                                }
+                            }
+                        }
+                        private var _fusionEnabled = false
+                        override fun isEnabled() = _fusionEnabled
                         override fun getStateJson(): String {
                             val state = org.json.JSONObject()
                             state.put("enabled", false)
