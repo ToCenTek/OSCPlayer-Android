@@ -41,7 +41,7 @@ body{background:#0d0d1a;color:#d0d0d0;font-family:system-ui,sans-serif;overflow:
 <button onclick="regularize()">均匀化</button>
 <button onclick="resetMesh()">重置</button>
 <button onclick="resetSource()">源重置</button>
-<span style="font-size:10px;color:#556;margin-left:auto">WASD选点 ↑↓移动 Shift扩选 Tab全选</span>
+<span style="font-size:10px;color:#556;margin-left:auto">WASD选点 ↑↓→←移动 Shift+WASD扩选 Shift+箭头微调</span>
 </div>
 <div class="canvas-container">
 <div class="view-wrap view-source"><div class="view-label">源</div><canvas id="srcCanvas"></canvas></div>
@@ -233,20 +233,37 @@ OC.addEventListener('contextmenu',e=>e.preventDefault())
 // Keyboard
 document.addEventListener('keydown',e=>{
   if(!mesh)return
-  const R=mesh.rows,C=mesh.cols;let mv=false,pr=cr,pc=cc
-  if(e.key==='w'||e.key==='ArrowUp'){cr=Math.max(0,cr-1);mv=true}
-  if(e.key==='s'||e.key==='ArrowDown'){cr=Math.min(R-1,cr+1);mv=true}
-  if(e.key==='a'||e.key==='ArrowLeft'){cc=Math.max(0,cc-1);mv=true}
-  if(e.key==='d'||e.key==='ArrowRight'){cc=Math.min(C-1,cc+1);mv=true}
-  if(mv){
-    e.preventDefault()
+  const R=mesh.rows,C=mesh.cols
+
+  // WASD: cursor movement (selection)
+  if(['w','W','a','A','s','S','d','D'].includes(e.key)){
+    e.preventDefault();const pr=cr,pc=cc
+    if(e.key==='w'||e.key==='W')cr=Math.max(0,cr-1)
+    if(e.key==='s'||e.key==='S')cr=Math.min(R-1,cr+1)
+    if(e.key==='a'||e.key==='A')cc=Math.max(0,cc-1)
+    if(e.key==='d'||e.key==='D')cc=Math.min(C-1,cc+1)
     if(e.shiftKey){
-      // Extend selection: add all points in rectangle from cursor to new cursor
       const r1=Math.min(pr,cr),r2=Math.max(pr,cr),c1=Math.min(pc,cc),c2=Math.max(pc,cc)
       for(let r=r1;r<=r2;r++)for(let c=c1;c<=c2;c++)sel.add(r+','+c)
     }else if(!e.ctrlKey&&!e.metaKey){sel.clear();sel.add(cr+','+cc)}
     draw();return
   }
+
+  // Arrow keys: nudge selected points
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+    e.preventDefault()
+    const step=e.shiftKey?0.001:0.005
+    let dx=0,dy=0
+    if(e.key==='ArrowUp')dy=-step
+    if(e.key==='ArrowDown')dy=step
+    if(e.key==='ArrowLeft')dx=-step
+    if(e.key==='ArrowRight')dx=step
+    const pts=[]
+    for(const k of sel){const rc=k.split(',');const p=mesh.points[+rc[0]][+rc[1]];p.x+=dx;p.y+=dy;pts.push({row:+rc[0],col:+rc[1],x:p.x,y:p.y})}
+    if(pts.length)setPts(pts)
+    draw();return
+  }
+
   if(e.key==='Tab'){e.preventDefault();if(sel.size===R*C)sel.clear();else for(let r=0;r<R;r++)for(let c=0;c<C;c++)sel.add(r+','+c);draw()}
   if((e.ctrlKey||e.metaKey)&&e.key==='a'){e.preventDefault();for(let r=0;r<R;r++)for(let c=0;c<C;c++)sel.add(r+','+c);draw()}
   if(e.key==='Escape'){sel.clear();draw()}
