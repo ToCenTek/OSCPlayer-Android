@@ -624,12 +624,15 @@ btn.onclick=function(){
     interface FusionAPI {
         fun getJson(): String
         fun setPoint(row: Int, col: Int, x: Float, y: Float)
+        fun setHandle(row: Int, col: Int, dir: Int, x: Float, y: Float)
         fun resize(cols: Int, rows: Int)
         fun setSubdiv(sx: Int, sy: Int)
         fun regularize()
         fun reset()
         fun enable(on: Boolean)
         fun isEnabled(): Boolean
+        fun isBezier(): Boolean
+        fun setBezier(on: Boolean)
         fun getStateJson(): String
         fun savePreset(name: String): Boolean
         fun loadPreset(name: String): Boolean
@@ -670,6 +673,15 @@ btn.onclick=function(){
                                 val x = json.getDouble("x").toFloat()
                                 val y = json.getDouble("y").toFloat()
                                 api.setPoint(row, col, x, y)
+                                sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
+                            }
+                            "set_handle" -> {
+                                val row = json.getInt("row")
+                                val col = json.getInt("col")
+                                val dir = json.getInt("dir")
+                                val x = json.getDouble("x").toFloat()
+                                val y = json.getDouble("y").toFloat()
+                                api.setHandle(row, col, dir, x, y)
                                 sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
                             }
                             "set_multi" -> {
@@ -714,6 +726,14 @@ btn.onclick=function(){
                         api.enable(json.optBoolean("enable", true))
                     }
                     sendResponse(client, 200, "OK", "application/json", """{"enabled":${api.isEnabled()}}""")
+                }
+                "bezier" -> {
+                    if (method == "POST" && contentLength > 0) {
+                        val body = readBody(input, contentLength)
+                        val json = org.json.JSONObject(body)
+                        api.setBezier(json.optBoolean("bezier", false))
+                    }
+                    sendResponse(client, 200, "OK", "application/json", """{"bezier":${api.isBezier()}}""")
                 }
                 "preset" -> {
                     when {

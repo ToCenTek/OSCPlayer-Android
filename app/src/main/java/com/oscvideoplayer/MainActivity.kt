@@ -50,21 +50,24 @@ class MainActivity : AppCompatActivity() {
     private var playerView: PlayerView? = null
     private var fusionGLView: android.opengl.GLSurfaceView? = null
     private var fusionRenderer: FusionRenderer? = null
-    private var glSurfaceReady = false
+    private var glReady = false
 
-    private fun connectGlSurface() {
+    private fun tryConnectGl() {
         val r = fusionRenderer
         val p = player
-        if (p == null) return
-        if (r == null || !r.surfaceReady) {
-            playerView?.player = p
-            playerView?.visibility = android.view.View.VISIBLE
+        if (p == null || r == null || !r.surfaceReady) {
+            // Retry later if player exists but GL not ready
+            if (p != null && r != null && !r.surfaceReady) {
+                android.view.Choreographer.getInstance().postFrameCallback {
+                    tryConnectGl()
+                }
+            }
             return
         }
         playerView?.player = null
         playerView?.visibility = android.view.View.GONE
         p.setVideoSurface(r.videoSurface)
-        Log.d(TAG, "GL surface connected to player")
+        Log.d(TAG, "GL surface connected")
     }
     private var isInitialized = false
     private var oscServer: OSCServer? = null
@@ -173,11 +176,7 @@ class MainActivity : AppCompatActivity() {
         fusionRenderer = FusionRenderer(
             meshProvider = { fusionMesh },
             onSurfaceCreated = { _ ->
-                // GL surface ready; connect player if available
-                runOnUiThread {
-                    glSurfaceReady = true
-                    connectGlSurface()
-                }
+                runOnUiThread { tryConnectGl() }
             }
         )
         fusionRenderer?.glSurfaceView = fusionGLView
@@ -620,7 +619,8 @@ class MainActivity : AppCompatActivity() {
                          }
                      })
                 }
-            connectGlSurface()
+            // PlayerView displays controls/buffering; video rendered via GL surface
+            tryConnectGl()
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
             }
@@ -690,6 +690,11 @@ class MainActivity : AppCompatActivity() {
                             m.setPoint(row, col, x, y)
                             fusionRenderer?.markMeshDirty()
                         }
+                        override fun setHandle(row: Int, col: Int, dir: Int, x: Float, y: Float) {
+                            val d = FusionMesh.Dir.values().getOrNull(dir) ?: return
+                            m.setHandle(row, col, d, x, y)
+                            fusionRenderer?.markMeshDirty()
+                        }
                         override fun resize(cols: Int, rows: Int) {
                             m.resize(cols, rows)
                             fusionRenderer?.markMeshDirty()
@@ -714,9 +719,18 @@ class MainActivity : AppCompatActivity() {
                         }
                         private var _fusionEnabled = true
                         override fun isEnabled() = _fusionEnabled
+                        private var _bezier = false
+                        override fun isBezier() = _bezier
+                        override fun setBezier(on: Boolean) {
+                            _bezier = on
+                            fusionRenderer?.bezier = on
+                            fusionRenderer?.markMeshDirty()
+                            Log.d(TAG, "Bezier=$on")
+                        }
                         override fun getStateJson(): String {
                             val state = org.json.JSONObject()
                             state.put("enabled", isEnabled())
+                            state.put("bezier", isBezier())
                             state.put("mesh", m.toJson())
                             val src = org.json.JSONObject()
                             src.put("x", 0); src.put("y", 0); src.put("w", 1); src.put("h", 1)

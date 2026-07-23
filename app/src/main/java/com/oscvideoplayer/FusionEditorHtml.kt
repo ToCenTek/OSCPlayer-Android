@@ -41,6 +41,12 @@ body{background:#0d0d1a;color:#d0d0d0;font-family:system-ui,sans-serif;overflow:
 <button onclick="regularize()">均匀化</button>
 <button onclick="resetMesh()">重置</button>
 <button onclick="resetSource()">源重置</button>
+<div class="sep"></div>
+<label><input type="checkbox" id="cbBezier" onchange="toggleBezier()"> 贝塞尔</label>
+<label>预置: <input type="text" id="presetName" value="my_preset" style="width:80px;background:#1a1a3a;color:#ddd;border:1px solid #3a3a6a;padding:2px 4px;border-radius:2px;font-size:11px"></label>
+<button onclick="savePreset()">保存</button>
+<button onclick="loadPreset()">加载</button>
+<button onclick="listPresets()">列表</button>
 <span style="font-size:10px;color:#556;margin-left:auto">WASD选点 ↑↓→←移动 Shift+WASD扩选 Shift+箭头微调</span>
 </div>
 <div class="canvas-container">
@@ -70,7 +76,7 @@ async function load(){
     if(s.mesh){
       if(!mesh||s.mesh.cols!==mesh.cols||s.mesh.rows!==mesh.rows){
         mesh=s.mesh; cr=Math.min(cr,mesh.rows-1); cc=Math.min(cc,mesh.cols-1)
-      }else mesh.points=s.mesh.points
+      }
       document.getElementById('subdivX').textContent=s.mesh.subdivX||0
       document.getElementById('subdivY').textContent=s.mesh.subdivY||0
     }
@@ -90,6 +96,7 @@ async function subdiv(dx,dy){
 }
 
 async function setPts(pts){await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_multi',points:pts})})}
+async function setHandle(row,col,dir,x,y){await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_handle',row,col,dir,x,y})})}
 
 function draw(){
   SX.clearRect(0,0,SC.width,SC.height); OX.clearRect(0,0,OC.width,OC.height)
@@ -146,6 +153,12 @@ function drawOut(){
   }
   OX.setLineDash([])
 
+  // Bezier handles
+  const bezier=document.getElementById('cbBezier').checked
+  if(bezier)for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    const p=mesh.points[r][c];
+    [0,1,2,3].forEach(d=>{const h=mesh.points[r][c].h?mesh.points[r][c].h[d]:null;if(h){const hp=mp(h.x,h.y);const pp=mp(p.x,p.y);OX.beginPath();OX.moveTo(pp.x,pp.y);OX.lineTo(hp.x,hp.y);OX.strokeStyle='rgba(255,200,0,0.5)';OX.lineWidth=1;OX.stroke();OX.beginPath();OX.arc(hp.x,hp.y,3,0,Math.PI*2);OX.fillStyle='#fc0';OX.fill()}})
+  }
   // Control points
   for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
     const p=mp(points[r][c].x,points[r][c].y)
@@ -171,13 +184,24 @@ function updateStatus(){
 
 function findPt(cx,cy){
   if(!mesh)return null
-  let best=null,bd=Infinity
+  let best=null,bd=Infinity,isHandle=false
   const aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
+  const bezier=document.getElementById('cbBezier').checked
+  // Check handles first (higher priority in bezier mode)
+  if(bezier)for(let r=0;r<mesh.rows;r++)for(let c=0;c<mesh.cols;c++){
+    const hs=mesh.points[r][c].h;if(!hs)continue
+    for(let d=0;d<hs.length;d++){const h=hs[d];if(!h)continue
+      const sx=ox0+h.x*aw,sy=oy0+h.y*ah
+      const d2=(cx-sx)**2+(cy-sy)**2
+      if(d2<bd){bd=d2;best={row:r,col:c,handle:d};isHandle=true}
+    }
+  }
   for(let r=0;r<mesh.rows;r++)for(let c=0;c<mesh.cols;c++){
     const p=mesh.points[r][c],sx=ox0+p.x*aw,sy=oy0+p.y*ah
     const d=(cx-sx)**2+(cy-sy)**2
-    if(d<bd){bd=d;best={row:r,col:c}}
+    if(d<bd){bd=d;best={row:r,col:c,handle:-1};isHandle=false}
   }
+  best=best||null;if(best)best.isHandle=isHandle
   return bd<600?best:null
 }
 
@@ -193,8 +217,8 @@ OC.addEventListener('mousedown',e=>{
     else{// Start drag with all selected points
       if(!sel.has(hit.row+','+hit.col)){sel.clear();sel.add(hit.row+','+hit.col)}
       cr=hit.row;cc=hit.col;drag='pt'
-      // Store initial positions
-      dragOrigins={mx:mx,my:my,pts:{}}
+      dragOrigins={mx:mx,my:my,pts:{},isHandle:hit.isHandle,handleDir:hit.handle,row:hit.row,col:hit.col,origX:0,origY:0}
+      if(hit.isHandle&&hit.handle>=0){const h=mesh.points[hit.row][hit.col].h[hit.handle];if(h){dragOrigins.origX=h.x;dragOrigins.origY=h.y}}
       for(const k of sel){const rc=k.split(',');const p=mesh.points[+rc[0]][+rc[1]];dragOrigins.pts[k]={x:p.x,y:p.y}}
     }
     draw();return
@@ -207,7 +231,8 @@ OC.addEventListener('mousemove',e=>{
   const r=OC.getBoundingClientRect(),mx=(e.clientX-r.left)*OC.width/r.width,my=(e.clientY-r.top)*OC.height/r.height
   if(drag==='pt'&&mesh&&dragOrigins){const aw=OC.width*0.85,ah=aw/aspect,ox0=(OC.width-aw)/2,oy0=(OC.height-ah)/2
     const dx=(mx-dragOrigins.mx)/aw,dy=(my-dragOrigins.my)/ah
-    for(const k of sel){const o=dragOrigins.pts[k];if(o){const rc=k.split(',');mesh.points[+rc[0]][+rc[1]].x=o.x+dx;mesh.points[+rc[0]][+rc[1]].y=o.y+dy}}
+    if(dragOrigins.isHandle&&dragOrigins.handleDir>=0){const h=mesh.points[dragOrigins.row][dragOrigins.col].h[dragOrigins.handleDir];if(h){h.x=dragOrigins.origX+dx;h.y=dragOrigins.origY+dy}
+    }else{for(const k of sel){const o=dragOrigins.pts[k];if(o){const rc=k.split(',');mesh.points[+rc[0]][+rc[1]].x=o.x+dx;mesh.points[+rc[0]][+rc[1]].y=o.y+dy}}}
     draw()
   }
   if(drag==='pan'){px+=(e.clientX-start.x)/10;py+=(e.clientY-start.y)/10;start={x:e.clientX,y:e.clientY};draw()}
@@ -227,7 +252,7 @@ OC.addEventListener('mouseup',e=>{
     }else{sel.clear();sel.add(cr+','+cc)}
     draw()
   }
-  if(drag==='pt'&&mesh){const pts=[];for(const k of sel){const rc=k.split(',');pts.push({row:+rc[0],col:+rc[1],x:mesh.points[+rc[0]][+rc[1]].x,y:mesh.points[+rc[0]][+rc[1]].y})};if(pts.length)setPts(pts)}
+  if(drag==='pt'&&mesh&&start){if(start.handle>=0){const h=mesh.points[start.row][start.col].h[start.handle];if(h&&start.handle===0)setHandle(start.row,start.col,0,h.x,h.y);if(start.handle===1)setHandle(start.row,start.col,1,h.x,h.y);if(start.handle===2)setHandle(start.row,start.col,2,h.x,h.y);if(start.handle===3)setHandle(start.row,start.col,3,h.x,h.y)}else{const pts=[];for(const k of sel){const rc=k.split(',');pts.push({row:+rc[0],col:+rc[1],x:mesh.points[+rc[0]][+rc[1]].x,y:mesh.points[+rc[0]][+rc[1]].y})};if(pts.length)setPts(pts)}}
   drag=null;start=null;dragOrigins=null
 })
 
@@ -279,6 +304,14 @@ async function toggle(){const cb=document.getElementById('cbEnable');const s=awa
 async function regularize(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'regularize'})});mesh=r;draw()}
 async function resetMesh(){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset'})});mesh=r;sel.clear();cr=1;cc=1;document.getElementById('subdivX').textContent='0';document.getElementById('subdivY').textContent='0';draw()}
 function resetSource(){src={x:0,y:0,w:1,h:1};draw()}
+async function toggleBezier(){const cb=document.getElementById('cbBezier');const r=await fetch('/fusion/api/bezier',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bezier:cb.checked})});const d=await r.json();cb.checked=d.bezier}
+
+async function savePreset(){const n=document.getElementById('presetName').value;if(!n)return;const r=await fetch('/fusion/api/preset/save/'+n);const d=await r.json();alert(d.ok?'保存成功':'保存失败')}
+
+async function loadPreset(){const n=document.getElementById('presetName').value;if(!n)return;const r=await fetch('/fusion/api/preset/load/'+n);if(!r.ok){alert('预置不存在');return}const s=await r.json()
+  if(s.mesh){mesh=s.mesh;document.getElementById('subdivX').textContent=s.mesh.subdivX||0;document.getElementById('subdivY').textContent=s.mesh.subdivY||0;cr=Math.min(cr,mesh.rows-1);cc=Math.min(cc,mesh.cols-1);sel.clear();draw()}}
+
+async function listPresets(){const r=await fetch('/fusion/api/preset/list');const names=await r.json();alert(names.length?'预置列表:\n'+names.join('\n'):'无预置')}
 
 load()
 setInterval(load,3000)
