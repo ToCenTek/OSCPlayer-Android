@@ -35,7 +35,7 @@ class FusionRenderer(
         GLES20.glClearColor(0f,0f,0f,1f);GLES20.glClearStencil(0)
         program=createProgram(VSH,FSH);aPosLoc=GLES20.glGetAttribLocation(program,"aPos")
         aUVLoc=GLES20.glGetAttribLocation(program,"aUV");uTexLoc=GLES20.glGetUniformLocation(program,"uTex")
-        uMeshLoc=GLES20.glGetUniformLocation(program,"uMesh");uMeshSizeLoc=GLES20.glGetUniformLocation(program,"uMeshSize")
+        uMeshLoc=GLES20.glGetUniformLocation(program,"uMesh");        uMeshSizeLoc=GLES20.glGetUniformLocation(program,"uMeshSize")
         stencilProgram=createProgram(SVS,SFS);sPosLoc=GLES20.glGetAttribLocation(stencilProgram,"aPos")
         val ids=IntArray(2);GLES20.glGenTextures(2,ids,0);surfaceTextureId=ids[0];meshTexId=ids[1]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,surfaceTextureId)
@@ -60,29 +60,17 @@ class FusionRenderer(
         if(surfaceTextureId==0)return
         val mesh=meshProvider()
         if(mesh!=null&&meshTexId>0){
-            // Use 33x33 subdivided mesh with perspective correction for 2x2 grids
-            val usePersp=mesh.cols==2&&mesh.rows==2&&enabled
-            val sc=if(usePersp)33 else mesh.cols;val sr=if(usePersp)33 else mesh.rows
-            val invMatrix=if(usePersp){
-                val m=android.graphics.Matrix()
-                val src=floatArrayOf(0f,0f,1f,0f,0f,1f,1f,1f)
-                val p00=mesh.points[0][0];val p10=mesh.points[0][1];val p01=mesh.points[1][0];val p11=mesh.points[1][1]
-                m.setPolyToPoly(src,0, floatArrayOf(p00.x,p00.y,p10.x,p10.y,p01.x,p01.y,p11.x,p11.y),0,4)
-                val inv=android.graphics.Matrix();m.invert(inv);inv
-            }else null
-            val buf=ByteBuffer.allocateDirect(sc*sr*4).order(ByteOrder.nativeOrder())
-            val pts=FloatArray(2)
-            for(r in 0 until sr)for(c in 0 until sc){
-                pts[0]=c.toFloat()/(sc-1);pts[1]=r.toFloat()/(sr-1)
-                if(invMatrix!=null)invMatrix.mapPoints(pts)
-                buf.put((pts[0].coerceIn(0f,1f)*255f).toInt().coerceIn(0,255).toByte())
-                buf.put((pts[1].coerceIn(0f,1f)*255f).toInt().coerceIn(0,255).toByte())
+            val cols=mesh.cols;val rows=mesh.rows
+            val buf=ByteBuffer.allocateDirect(cols*rows*4).order(ByteOrder.nativeOrder())
+            for(r in 0 until rows)for(c in 0 until cols){
+                val p=mesh.points[r][c]
+                buf.put((p.x*255f).toInt().coerceIn(0,255).toByte())
+                buf.put((p.y*255f).toInt().coerceIn(0,255).toByte())
                 buf.put(0.toByte());buf.put(255.toByte())
             }
             buf.position(0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,meshTexId)
-            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D,0,GLES20.GL_RGBA,sc,sr,0,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,buf)
-            GLES20.glUniform2f(uMeshSizeLoc,sc.toFloat(),sr.toFloat())
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D,0,GLES20.GL_RGBA,cols,rows,0,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,buf)
         }
         if(enabled&&mesh!=null){
             GLES20.glEnable(GLES20.GL_STENCIL_TEST)
@@ -92,10 +80,8 @@ class FusionRenderer(
             GLES20.glUseProgram(stencilProgram);GLES20.glEnableVertexAttribArray(sPosLoc)
             val cols=mesh.cols;val rows=mesh.rows
             for(r in 0 until rows-1)for(c in 0 until cols-1){
-                val p00=Pair(mesh.points[r][c].x*2f-1f,(1f-mesh.points[r][c].y)*2f-1f)
-                val p10=Pair(mesh.points[r][c+1].x*2f-1f,(1f-mesh.points[r][c+1].y)*2f-1f)
-                val p01=Pair(mesh.points[r+1][c].x*2f-1f,(1f-mesh.points[r+1][c].y)*2f-1f)
-                val p11=Pair(mesh.points[r+1][c+1].x*2f-1f,(1f-mesh.points[r+1][c+1].y)*2f-1f)
+                val p00=pair(mesh.points[r][c]);val p10=pair(mesh.points[r][c+1])
+                val p01=pair(mesh.points[r+1][c]);val p11=pair(mesh.points[r+1][c+1])
                 val tri=floatArrayOf(p00.first,p00.second,p10.first,p10.second,p11.first,p11.second,p00.first,p00.second,p11.first,p11.second,p01.first,p01.second)
                 val b=ByteBuffer.allocateDirect(tri.size*4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(tri).apply{position(0)}
                 GLES20.glVertexAttribPointer(sPosLoc,2,GLES20.GL_FLOAT,false,8,b)
@@ -106,6 +92,7 @@ class FusionRenderer(
             GLES20.glStencilOp(GLES20.GL_KEEP,GLES20.GL_KEEP,GLES20.GL_KEEP)
         }
         GLES20.glUseProgram(program);GLES20.glUniform1i(uTexLoc,0);GLES20.glUniform1i(uMeshLoc,1)
+        if(mesh!=null)GLES20.glUniform2f(uMeshSizeLoc,mesh.cols.toFloat(),mesh.rows.toFloat())
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,surfaceTextureId)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
@@ -122,6 +109,7 @@ class FusionRenderer(
     }
     override fun onFrameAvailable(st:SurfaceTexture?){frameAvailable=true}
     fun markMeshDirty(){}
+    private fun pair(p:FusionMesh.Point)=Pair(p.x*2f-1f,(1f-p.y)*2f-1f)
     private fun compileShader(type:Int,src:String):Int{
         val s=GLES20.glCreateShader(type);GLES20.glShaderSource(s,src);GLES20.glCompileShader(s)
         val st=IntArray(1);GLES20.glGetShaderiv(s,GLES20.GL_COMPILE_STATUS,st,0)
