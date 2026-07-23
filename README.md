@@ -2,7 +2,6 @@
 
 Android TV 视频播放器, 通过 OSC (UDP 8000) 协议远程控制.
 专为展览展示/视频墙/数字标牌场景设计, 兼容 Allwinner/Rockchip/Amlogic 等设备.
-采用 MIT 开源许可.
 
 ## 功能
 
