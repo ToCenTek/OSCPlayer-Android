@@ -105,7 +105,7 @@ class FusionRenderer(
         vertBuffer.clear();vertCount=0
         // Fine subdivision for ALL cells to eliminate crease
         // sub = 32 / (cols-1) keeps total triangles constant (~2048)
-        val sub=(32/(cols-1)).coerceIn(2,32)
+        val sub=(48/(cols-1)).coerceIn(4,32)
         for(r in 0 until rows-1)for(c in 0 until cols-1){
             val p00=mesh.points[r][c];val p10=mesh.points[r][c+1]
             val p01=mesh.points[r+1][c];val p11=mesh.points[r+1][c+1]
