@@ -124,26 +124,25 @@ void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 0.6); }
 
     private fun drawGrid() {
         val mesh = meshProvider() ?: return
-        GLES20.glUseProgram(lineProgram)
-        GLES20.glEnableVertexAttribArray(lPosLoc)
+        try {
+            GLES20.glUseProgram(lineProgram)
+            GLES20.glEnableVertexAttribArray(lPosLoc)
 
-        val cols = mesh.cols; val rows = mesh.rows
-        // Each line segment = 2 vertices. Horizontal: rows * (cols-1). Vertical: cols * (rows-1).
-        val lineCount = rows * (cols - 1) + cols * (rows - 1)
-        val buf = ByteBuffer.allocateDirect(lineCount * 2 * 4 * 2).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        for (r in 0 until rows) for (c in 0 until cols - 1) {
-            val p = mesh.points[r][c]; val q = mesh.points[r][c + 1]
-            buf.put(p.x * 2f - 1f); buf.put((1f - p.y) * 2f - 1f)
-            buf.put(q.x * 2f - 1f); buf.put((1f - q.y) * 2f - 1f)
-        }
-        for (c in 0 until cols) for (r in 0 until rows - 1) {
-            val p = mesh.points[r][c]; val q = mesh.points[r + 1][c]
-            buf.put(p.x * 2f - 1f); buf.put((1f - p.y) * 2f - 1f)
-            buf.put(q.x * 2f - 1f); buf.put((1f - q.y) * 2f - 1f)
-        }
-        buf.position(0)
-        GLES20.glVertexAttribPointer(lPosLoc, 2, GLES20.GL_FLOAT, false, 8, buf)
-        GLES20.glDrawArrays(GLES20.GL_LINES, 0, lineCount * 2)
+            val cols = mesh.cols; val rows = mesh.rows
+            val lineCount = rows * (cols - 1) + cols * (rows - 1)
+            val buf = ByteBuffer.allocateDirect(lineCount * 2 * 8).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            for (r in 0 until rows) for (c in 0 until cols - 1) {
+                buf.put(mesh.points[r][c].x * 2f - 1f); buf.put((1f - mesh.points[r][c].y) * 2f - 1f)
+                buf.put(mesh.points[r][c + 1].x * 2f - 1f); buf.put((1f - mesh.points[r][c + 1].y) * 2f - 1f)
+            }
+            for (c in 0 until cols) for (r in 0 until rows - 1) {
+                buf.put(mesh.points[r][c].x * 2f - 1f); buf.put((1f - mesh.points[r][c].y) * 2f - 1f)
+                buf.put(mesh.points[r + 1][c].x * 2f - 1f); buf.put((1f - mesh.points[r + 1][c].y) * 2f - 1f)
+            }
+            buf.position(0)
+            GLES20.glVertexAttribPointer(lPosLoc, 2, GLES20.GL_FLOAT, false, 8, buf)
+            GLES20.glDrawArrays(GLES20.GL_LINES, 0, lineCount * 2)
+        } catch (e: Exception) { Log.w(TAG, "drawGrid: ${e.message}") }
     }
 
     private fun buildMesh() {
@@ -159,12 +158,19 @@ void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 0.6); }
         for (r in 0 until rows - 1) for (c in 0 until cols - 1) {
             val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
             val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
-            val tu0 = c.toFloat() / (cols - 1); val tu1 = (c + 1).toFloat() / (cols - 1)
-            val tv0 = r.toFloat() / (rows - 1); val tv1 = (r + 1).toFloat() / (rows - 1)
-            emit(p00.x, p00.y, tu0, tv0); emit(p10.x, p10.y, tu1, tv0)
-            emit(p01.x, p01.y, tu0, tv1)
-            emit(p10.x, p10.y, tu1, tv0); emit(p11.x, p11.y, tu1, tv1)
-            emit(p01.x, p01.y, tu0, tv1)
+            // Subdivide each cell into 2x2 sub-cells for smoother interpolation
+            for (sr in 0 until 2) for (sc in 0 until 2) {
+                val fu = sc / 2f; val fv = sr / 2f
+                val fu1 = (sc + 1) / 2f; val fv1 = (sr + 1) / 2f
+                val sx = { u: Float, v: Float -> lerp(lerp(p00.x, p10.x, u), lerp(p01.x, p11.x, u), v) }
+                val sy = { u: Float, v: Float -> lerp(lerp(p00.y, p10.y, u), lerp(p01.y, p11.y, u), v) }
+                val tu = (c + fu) / (cols - 1); val tv = (r + fv) / (rows - 1)
+                val tu1 = (c + fu1) / (cols - 1); val tv1 = (r + fv1) / (rows - 1)
+                emit(sx(fu, fv), sy(fu, fv), tu, tv); emit(sx(fu1, fv), sy(fu1, fv), tu1, tv)
+                emit(sx(fu, fv1), sy(fu, fv1), tu, tv1)
+                emit(sx(fu1, fv), sy(fu1, fv), tu1, tv); emit(sx(fu1, fv1), sy(fu1, fv1), tu1, tv1)
+                emit(sx(fu, fv1), sy(fu, fv1), tu, tv1)
+            }
         }
         vertBuffer.position(0)
     }
@@ -175,6 +181,8 @@ void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 0.6); }
         vertBuffer.put(tu); vertBuffer.put(tv)
         vertCount++
     }
+
+    private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
     private fun createProgram(vsh: String, fsh: String): Int {
         val vs = compileShader(GLES20.GL_VERTEX_SHADER, vsh)
