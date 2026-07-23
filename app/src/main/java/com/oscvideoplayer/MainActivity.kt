@@ -689,9 +689,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveMesh() {
-        val key = "fusion_mesh_v1"
-        val json = fusionMesh?.toJson()?.toString() ?: return
-        prefs?.edit()?.putString(key, json)?.apply()
+        try {
+            val key = "fusion_mesh_v1"
+            val json = fusionMesh?.toJson()?.toString() ?: return
+            prefs?.edit()?.putString(key, json)?.apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "saveMesh error: ${e.message}")
+        }
     }
 
     private fun loadMesh() {

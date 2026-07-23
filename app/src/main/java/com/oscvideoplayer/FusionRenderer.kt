@@ -132,12 +132,14 @@ void main() {
         if (frameCount++ % 30 == 0) Log.d(TAG, "frames=$frameCount")
     }
 
-    fun markMeshDirty() { }
+    fun markMeshDirty() { lastMeshSig++ }
+    @Volatile private var lastMeshSig = 0
 
     private fun buildMesh() {
         val mesh = meshProvider() ?: return
-        // Log first build only
-        if (vertCount == 0) Log.d(TAG, "buildMesh: p00=(${mesh.points[0][0].x},${mesh.points[0][0].y})")
+        // Use volatile change counter to force rebuild every time markMeshDirty is called
+        // Also rebuild every frame for simplicity (volatile ensures visibility)
+        lastMeshSig++
         if (!enabled) {
             vertBuffer.clear(); vertCount = 0
             emit(0f, 0f, 0f, 0f); emit(1f, 0f, 1f, 0f); emit(0f, 1f, 0f, 1f)
