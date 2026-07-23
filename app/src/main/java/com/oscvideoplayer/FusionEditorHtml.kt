@@ -76,7 +76,7 @@ async function load(){
     if(s.mesh){
       if(!mesh||s.mesh.cols!==mesh.cols||s.mesh.rows!==mesh.rows){
         mesh=s.mesh; cr=Math.min(cr,mesh.rows-1); cc=Math.min(cc,mesh.cols-1)
-      }else mesh.points=s.mesh.points
+      }
       document.getElementById('subdivX').textContent=s.mesh.subdivX||0
       document.getElementById('subdivY').textContent=s.mesh.subdivY||0
     }

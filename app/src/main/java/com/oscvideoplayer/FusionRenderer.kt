@@ -189,20 +189,22 @@ void main() {
                 lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
             )
         }
-        // Bezier: sample 4 horizontal bezier curves at 4 vertical positions
-        val t = { idx: Int -> catmullRom1D(
-            mesh.bezierX(r - 1 + idx, c, FusionMesh.Dir.RIGHT, fu, true),
-            mesh.bezierX(r + idx, c, FusionMesh.Dir.RIGHT, fu, true),
-            mesh.bezierX(r + 1 + idx, c, FusionMesh.Dir.RIGHT, fu, true),
-            mesh.bezierX(r + 2 + idx, c, FusionMesh.Dir.RIGHT, fu, true), fv
-        )}
-        val yy = { idx: Int -> catmullRom1D(
-            mesh.bezierX(r - 1 + idx, c, FusionMesh.Dir.RIGHT, fu, false),
-            mesh.bezierX(r + idx, c, FusionMesh.Dir.RIGHT, fu, false),
-            mesh.bezierX(r + 1 + idx, c, FusionMesh.Dir.RIGHT, fu, false),
-            mesh.bezierX(r + 2 + idx, c, FusionMesh.Dir.RIGHT, fu, false), fv
-        )}
-        return FusionMesh.Point(t(0), yy(0))
+        // Bezier: evaluate horizontal bezier curve at 4 rows, then Catmull-Rom vertically
+        val R = mesh.rows; val C = mesh.cols
+        fun bx(row: Int, useX: Boolean): Float {
+            if (row < 0 || row >= R) {
+                // Extrapolate: use first/last row
+                val rr = row.coerceIn(0, R - 1)
+                return mesh.bezierX(rr, c, FusionMesh.Dir.RIGHT, fu, useX)
+            }
+            return mesh.bezierX(row, c, FusionMesh.Dir.RIGHT, fu, useX)
+        }
+        val x0 = bx(r - 1, true); val x1 = bx(r, true); val x2 = bx(r + 1, true); val x3 = bx(r + 2, true)
+        val y0 = bx(r - 1, false); val y1 = bx(r, false); val y2 = bx(r + 1, false); val y3 = bx(r + 2, false)
+        return FusionMesh.Point(
+            catmullRom1D(x0, x1, x2, x3, fv),
+            catmullRom1D(y0, y1, y2, y3, fv)
+        )
     }
 
     private fun emit(x: Float, y: Float, tu: Float, tv: Float) {

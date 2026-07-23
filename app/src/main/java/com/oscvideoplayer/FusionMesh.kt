@@ -136,9 +136,10 @@ class FusionMesh {
         Dir.UP -> r > 0
     }
 
-    // Evaluate point on bezier curve between (r,c) and (r,c+1) at parameter t
+    // Evaluate cubic bezier: B(t) = (1-t)³·P0 + 3(1-t)²·t·P1 + 3(1-t)·t²·P2 + t³·P3
     fun bezierX(r: Int, c: Int, dir: Dir, t: Float, useX: Boolean): Float {
-        val p0 = points[r][c]; val p3 = when (dir) {
+        val p0 = points[r][c]
+        val p3 = when (dir) {
             Dir.RIGHT -> points[r][c + 1]; Dir.LEFT -> points[r][c - 1]
             Dir.DOWN -> points[r + 1][c]; Dir.UP -> points[r - 1][c]
         }
@@ -147,19 +148,17 @@ class FusionMesh {
             Dir.RIGHT -> Dir.LEFT; Dir.LEFT -> Dir.RIGHT
             Dir.DOWN -> Dir.UP; Dir.UP -> Dir.DOWN
         }
-        val h1Idx = when (dir) {
-            Dir.RIGHT -> handleData[r][c + 1][Dir.LEFT.ordinal]
-            Dir.LEFT -> handleData[r][c - 1][Dir.RIGHT.ordinal]
-            Dir.DOWN -> handleData[r + 1][c][Dir.UP.ordinal]
-            Dir.UP -> handleData[r - 1][c][Dir.DOWN.ordinal]
-        }
-        val h1 = h1Idx ?: return if (useX) lerp(p0.x, p3.x, t) else lerp(p0.y, p3.y, t)
+        val oppRow = when (dir) { Dir.RIGHT -> r; Dir.LEFT -> r; Dir.DOWN -> r + 1; Dir.UP -> r - 1 }
+        val oppCol = when (dir) { Dir.RIGHT -> c + 1; Dir.LEFT -> c - 1; Dir.DOWN -> c; Dir.UP -> c }
+        val h1 = if (oppRow in 0 until rows && oppCol in 0 until cols)
+            handleData[oppRow][oppCol][opposite.ordinal] else null
+        val p1 = h0; val p2 = h1 ?: return if (useX) lerp(p0.x, p3.x, t) else lerp(p0.y, p3.y, t)
         val a = if (useX) p0.x else p0.y
-        val b = if (useX) h0.x else h0.y
-        val c_ = if (useX) h1.x else h1.y
+        val b = if (useX) p1.x else p1.y
+        val c_ = if (useX) p2.x else p2.y
         val d = if (useX) p3.x else p3.y
-        val t2 = t * t; val t3 = t2 * t
-        return (1 - t3) * a + 3 * (1 - t2) * t * b + 3 * (1 - t) * t2 * c_ + t3 * d
+        val u = 1f - t
+        return u * u * u * a + 3f * u * u * t * b + 3f * u * t * t * c_ + t * t * t * d
     }
 
     private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
