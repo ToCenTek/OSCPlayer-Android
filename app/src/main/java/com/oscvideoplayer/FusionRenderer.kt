@@ -32,7 +32,11 @@ varying vec2 vUV;
 uniform samplerExternalOES uTex;
 void main() { gl_FragColor = texture2D(uTex, vUV); }
 """
-        private const val LSH = """
+        private const val LVS = """
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+"""
+        private const val LFS = """
 precision mediump float;
 void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 0.6); }
 """
@@ -69,7 +73,7 @@ void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 0.6); }
         aUVLoc = GLES20.glGetAttribLocation(program, "aUV")
         uTexLoc = GLES20.glGetUniformLocation(program, "uTex")
 
-        lineProgram = createProgram(VSH, LSH)
+        lineProgram = createProgram(LVS, LFS)
         lPosLoc = GLES20.glGetAttribLocation(lineProgram, "aPos")
 
         val texIds = IntArray(1)
