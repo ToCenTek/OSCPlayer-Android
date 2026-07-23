@@ -53,17 +53,10 @@ class MainActivity : AppCompatActivity() {
     private var glReady = false
 
     private fun tryConnectGl() {
-        val r = fusionRenderer
         val p = player
-        if (p == null || r == null || !r.surfaceReady) {
-            // Retry later if player exists but GL not ready
-            if (p != null && r != null && !r.surfaceReady) {
-                android.view.Choreographer.getInstance().postFrameCallback {
-                    tryConnectGl()
-                }
-            }
-            return
-        }
+        val r = fusionRenderer
+        if (p == null || r == null) { glReady = false; return }
+        if (!glReady || !r.surfaceReady) { glReady = true; return }
         playerView?.player = null
         playerView?.visibility = android.view.View.GONE
         p.setVideoSurface(r.videoSurface)
@@ -176,7 +169,8 @@ class MainActivity : AppCompatActivity() {
         fusionRenderer = FusionRenderer(
             meshProvider = { fusionMesh },
             onSurfaceCreated = { _ ->
-                runOnUiThread { tryConnectGl() }
+                // GL surface ready flag - picked up by main thread in initializePlayer
+                glReady = true
             }
         )
         fusionRenderer?.glSurfaceView = fusionGLView
