@@ -183,7 +183,9 @@ class MainActivity : AppCompatActivity() {
             fusionRenderer = FusionRenderer(
                 meshProvider = { fusionMesh },
             onSurfaceCreated = { _ ->
-                tryConnectGl()
+                try { tryConnectGl() } catch (e: Exception) {
+                    Log.e(TAG, "onSurfaceCreated error: ${e.message}")
+                }
             }
             )
             fusionRenderer?.glSurfaceView = fusionGLView
@@ -631,9 +633,13 @@ class MainActivity : AppCompatActivity() {
                      })
                 }
             // PlayerView displays controls/buffering; video rendered via GL surface
-            tryConnectGl()
-            // Start GL retry loop
-            startGlRetry()
+            try {
+                tryConnectGl()
+                // Start GL retry loop
+                startGlRetry()
+            } catch (e: Exception) {
+                Log.e(TAG, "GL connect error: ${e.message}")
+            }
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
             }
@@ -682,10 +688,26 @@ class MainActivity : AppCompatActivity() {
         return null
     }
 
+    private fun saveMesh() {
+        val key = "fusion_mesh_v1"
+        val json = fusionMesh?.toJson()?.toString() ?: return
+        prefs?.edit()?.putString(key, json)?.apply()
+    }
+
+    private fun loadMesh() {
+        val key = "fusion_mesh_v1"
+        val json = prefs?.getString(key, null) ?: return
+        try {
+            fusionMesh?.fromJson(org.json.JSONObject(json))
+            fusionRenderer?.markMeshDirty()
+        } catch (_: Exception) {}
+    }
+
     private fun startHttpUploadServer() {
         try {
             val dir = getDefaultDirectory()
             fusionMesh = FusionMesh()
+            loadMesh()
             httpUploadServer = HttpUploadServer(
                 port = 8080,
                 uploadDir = dir,
@@ -701,27 +723,33 @@ class MainActivity : AppCompatActivity() {
                         override fun getJson() = m.toJson().toString()
                         override fun setPoint(row: Int, col: Int, x: Float, y: Float) {
                             m.setPoint(row, col, x, y)
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun setHandle(row: Int, col: Int, dir: Int, x: Float, y: Float) {
                             val d = FusionMesh.Dir.values().getOrNull(dir) ?: return
                             m.setHandle(row, col, d, x, y)
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun resize(cols: Int, rows: Int) {
                             m.resize(cols, rows)
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun setSubdiv(sx: Int, sy: Int) {
                             m.setSubdiv(sx, sy)
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun regularize() {
                             m.regularize()
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun reset() {
                             m.reset()
+                            saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
                         override fun enable(on: Boolean) {
