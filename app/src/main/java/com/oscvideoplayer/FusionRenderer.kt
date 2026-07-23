@@ -29,7 +29,7 @@ class FusionRenderer(
     private var surfaceObj:Surface?=null;val videoSurface:Surface? get()=surfaceObj
     private val MAX_VERTS=130*130*6
     private var vertBuffer:FloatBuffer=ByteBuffer.allocateDirect(MAX_VERTS*4*4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-    private var vertCount=0;@Volatile private var meshHash=0L
+    private var vertCount=0;@Volatile private var meshHash= -1L
     var glSurfaceView:GLSurfaceView?=null
     @Volatile var enabled:Boolean=true
     @Volatile var showGrid:Boolean=true
@@ -73,13 +73,14 @@ class FusionRenderer(
         if(showGrid)drawGrid()
     }
     override fun onFrameAvailable(st:SurfaceTexture?){frameAvailable=true}
-    fun markMeshDirty(){meshHash=0L}
+    fun markMeshDirty(){meshHash= -1L}
     private fun lerp(a:Float,b:Float,t:Float)=a+(b-a)*t
     private fun drawGrid(){
         val mesh=meshProvider()?:return
         try{
             GLES20.glUseProgram(gridProgram);GLES20.glEnableVertexAttribArray(gPosLoc)
             val cols=mesh.cols;val rows=mesh.rows
+            // Grid lines
             for(r in 0 until rows)for(c in 0 until cols-1){
                 val a=mesh.points[r][c];val b=mesh.points[r][c+1]
                 val buf=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -91,6 +92,14 @@ class FusionRenderer(
                 val buf=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder()).asFloatBuffer()
                 buf.put(a.x*2f-1f);buf.put((1f-a.y)*2f-1f);buf.put(b.x*2f-1f);buf.put((1f-b.y)*2f-1f);buf.position(0)
                 GLES20.glVertexAttribPointer(gPosLoc,2,GLES20.GL_FLOAT,false,8,buf);GLES20.glDrawArrays(GLES20.GL_LINES,0,2)
+            }
+            // Control points as small quads
+            val radius=6f/1920f
+            for(r in 0 until rows)for(c in 0 until cols){
+                val p=mesh.points[r][c];val x=p.x*2f-1f;val y=(1f-p.y)*2f-1f
+                val q=floatArrayOf(x-radius,y-radius,x+radius,y-radius,x+radius,y+radius,x-radius,y-radius,x+radius,y+radius,x-radius,y+radius)
+                val b=ByteBuffer.allocateDirect(q.size*4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(q).apply{position(0)}
+                GLES20.glVertexAttribPointer(gPosLoc,2,GLES20.GL_FLOAT,false,8,b);GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,6)
             }
         }catch(_:Exception){}
     }

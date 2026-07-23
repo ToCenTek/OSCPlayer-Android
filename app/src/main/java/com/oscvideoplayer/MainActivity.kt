@@ -746,8 +746,8 @@ class MainActivity : AppCompatActivity() {
                             saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }
-                        override fun regularize() {
-                            m.regularize()
+                        override fun regularize(sel: String?) {
+                            m.regularize(sel = sel)
                             saveMesh()
                             fusionRenderer?.markMeshDirty()
                         }

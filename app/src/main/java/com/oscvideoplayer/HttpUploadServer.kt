@@ -627,7 +627,7 @@ btn.onclick=function(){
         fun setHandle(row: Int, col: Int, dir: Int, x: Float, y: Float)
         fun resize(cols: Int, rows: Int)
         fun setSubdiv(sx: Int, sy: Int)
-        fun regularize()
+        fun regularize(sel: String? = null)
         fun reset()
         fun enable(on: Boolean)
         fun isEnabled(): Boolean
@@ -704,7 +704,8 @@ fun getStateJson(): String
                                 sendResponse(client, 200, "OK", "application/json", api.getJson())
                             }
                             "regularize" -> {
-                                api.regularize()
+                                val pts = json.optString("points", "")
+                                api.regularize(sel = pts.ifEmpty { null })
                                 sendResponse(client, 200, "OK", "application/json", api.getJson())
                             }
                             "reset" -> {

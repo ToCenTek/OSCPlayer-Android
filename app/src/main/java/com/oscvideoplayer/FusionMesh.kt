@@ -169,16 +169,27 @@ class FusionMesh {
 
     private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
-    fun regularize(iterations: Int = 50, lambda: Float = 0.5f) {
+    fun regularize(iterations: Int = 20, lambda: Float = 0.3f, sel: String? = null) {
+        val selected = HashSet<String>()
+        if (sel != null) for (s in sel.split(",")) selected.add(s)
         for (iter in 0 until iterations) {
-            for (r in 1 until rows - 1) for (c in 1 until cols - 1) {
+            for (r in 0 until rows) for (c in 0 until cols) {
+                if ((r == 0 || r == rows - 1) && (c == 0 || c == cols - 1)) continue // corners stay fixed
+                if (selected.isNotEmpty()) {
+                    val key = "$r,$c"
+                    if (key !in selected && "${r - 1},$c" !in selected && "${r + 1},$c" !in selected &&
+                        "$r,${c - 1}" !in selected && "$r,${c + 1}" !in selected) continue
+                }
                 val p = points[r][c]
-                p.x += ((points[r - 1][c].x + points[r + 1][c].x + points[r][c - 1].x + points[r][c + 1].x) / 4f - p.x) * lambda
-                p.y += ((points[r - 1][c].y + points[r + 1][c].y + points[r][c - 1].y + points[r][c + 1].y) / 4f - p.y) * lambda
+                var sumX = 0f; var sumY = 0f; var n = 0
+                if (r > 0) { sumX += points[r - 1][c].x; sumY += points[r - 1][c].y; n++ }
+                if (r < rows - 1) { sumX += points[r + 1][c].x; sumY += points[r + 1][c].y; n++ }
+                if (c > 0) { sumX += points[r][c - 1].x; sumY += points[r][c - 1].y; n++ }
+                if (c < cols - 1) { sumX += points[r][c + 1].x; sumY += points[r][c + 1].y; n++ }
+                if (n > 0) { p.x += (sumX / n - p.x) * lambda; p.y += (sumY / n - p.y) * lambda }
             }
         }
-        for (r in 0 until rows) for (c in 0 until cols) autoHandles(r, c)
-        Log.d(TAG, "Regularized ${iterations} iterations")
+        Log.d(TAG, "Regularized ${iterations} iters sel=${selected.size}")
     }
 
     fun toJson(): JSONObject {
