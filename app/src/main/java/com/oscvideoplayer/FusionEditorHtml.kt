@@ -95,8 +95,8 @@ async function subdiv(dx,dy){
   draw()
 }
 
-async function setPts(pts){await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_multi',points:pts})})}
-async function setHandle(row,col,dir,x,y){await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_handle',row,col,dir,x,y})})}
+async function setPts(pts){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_multi',points:pts})});if(!r.ok)console.log('setPts error',r)}
+async function setHandle(row,col,dir,x,y){const r=await api('/fusion/api/mesh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_handle',row,col,dir,x,y})});if(!r.ok)console.log('setHandle error',r)}
 
 function draw(){
   SX.clearRect(0,0,SC.width,SC.height); OX.clearRect(0,0,OC.width,OC.height)
@@ -217,6 +217,7 @@ OC.addEventListener('mousedown',e=>{
     else{// Start drag with all selected points
       if(!sel.has(hit.row+','+hit.col)){sel.clear();sel.add(hit.row+','+hit.col)}
       cr=hit.row;cc=hit.col;drag='pt'
+      start={row:hit.row,col:hit.col,handle:hit.handle}
       dragOrigins={mx:mx,my:my,pts:{},isHandle:hit.isHandle,handleDir:hit.handle,row:hit.row,col:hit.col,origX:0,origY:0}
       if(hit.isHandle&&hit.handle>=0){const h=mesh.points[hit.row][hit.col].h[hit.handle];if(h){dragOrigins.origX=h.x;dragOrigins.origY=h.y}}
       for(const k of sel){const rc=k.split(',');const p=mesh.points[+rc[0]][+rc[1]];dragOrigins.pts[k]={x:p.x,y:p.y}}
