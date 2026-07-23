@@ -35,7 +35,7 @@ class FusionRenderer(
         GLES20.glClearColor(0f,0f,0f,1f);GLES20.glClearStencil(0)
         program=createProgram(VSH,FSH);aPosLoc=GLES20.glGetAttribLocation(program,"aPos")
         aUVLoc=GLES20.glGetAttribLocation(program,"aUV");uTexLoc=GLES20.glGetUniformLocation(program,"uTex")
-        uMeshLoc=GLES20.glGetUniformLocation(program,"uMesh");uMeshSizeLoc=GLES20.glGetUniformLocation(program,"uMeshSize")
+        uMeshLoc=GLES20.glGetUniformLocation(program,"uMesh");        uMeshSizeLoc=GLES20.glGetUniformLocation(program,"uMeshSize")
         stencilProgram=createProgram(SVS,SFS);sPosLoc=GLES20.glGetAttribLocation(stencilProgram,"aPos")
         val ids=IntArray(2);GLES20.glGenTextures(2,ids,0);surfaceTextureId=ids[0];meshTexId=ids[1]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,surfaceTextureId)
@@ -51,7 +51,7 @@ class FusionRenderer(
         surfaceTexture=SurfaceTexture(surfaceTextureId).apply{setOnFrameAvailableListener(this@FusionRenderer)}
         surfaceObj=Surface(surfaceTexture!!);GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,0)
         surfaceReady=true;onSurfaceCreated(surfaceTexture!!)
-        Log.d(TAG,"init tex=$surfaceTextureId mesh=$meshTexId")
+        Log.d(TAG,"init")
     }
     override fun onSurfaceChanged(gl:GL10?,w:Int,h:Int){GLES20.glViewport(0,0,w,h)}
     override fun onDrawFrame(gl:GL10?){
@@ -72,8 +72,6 @@ class FusionRenderer(
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,meshTexId)
             GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D,0,GLES20.GL_RGBA,cols,rows,0,GLES20.GL_RGBA,GLES20.GL_UNSIGNED_BYTE,buf)
         }
-
-        // Step 1: Draw mesh boundary to stencil buffer
         if(enabled&&mesh!=null){
             GLES20.glEnable(GLES20.GL_STENCIL_TEST)
             GLES20.glStencilFunc(GLES20.GL_ALWAYS,1,0xFF)
@@ -93,8 +91,6 @@ class FusionRenderer(
             GLES20.glStencilFunc(GLES20.GL_EQUAL,1,0xFF)
             GLES20.glStencilOp(GLES20.GL_KEEP,GLES20.GL_KEEP,GLES20.GL_KEEP)
         }
-
-        // Step 2: Render video with mesh warp, stencil clips to boundary
         GLES20.glUseProgram(program);GLES20.glUniform1i(uTexLoc,0);GLES20.glUniform1i(uMeshLoc,1)
         if(mesh!=null)GLES20.glUniform2f(uMeshSizeLoc,mesh.cols.toFloat(),mesh.rows.toFloat())
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -109,7 +105,6 @@ class FusionRenderer(
         GLES20.glVertexAttribPointer(aUVLoc,2,GLES20.GL_FLOAT,false,16,qbuf)
         GLES20.glEnableVertexAttribArray(aUVLoc)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,6)
-
         if(enabled)GLES20.glDisable(GLES20.GL_STENCIL_TEST)
     }
     override fun onFrameAvailable(st:SurfaceTexture?){frameAvailable=true}
@@ -118,7 +113,7 @@ class FusionRenderer(
     private fun compileShader(type:Int,src:String):Int{
         val s=GLES20.glCreateShader(type);GLES20.glShaderSource(s,src);GLES20.glCompileShader(s)
         val st=IntArray(1);GLES20.glGetShaderiv(s,GLES20.GL_COMPILE_STATUS,st,0)
-        if(st[0]==0){Log.e(TAG,"shader:"+GLES20.glGetShaderInfoLog(s));GLES20.glDeleteShader(s);return 0}
+        if(st[0]==0){Log.e(TAG,"shaderErr:"+GLES20.glGetShaderInfoLog(s));GLES20.glDeleteShader(s);return 0}
         return s
     }
     private fun createProgram(vsh:String,fsh:String):Int{
