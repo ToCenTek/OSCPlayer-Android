@@ -34,8 +34,22 @@ void main() {
 precision mediump float;
 varying vec2 vUV;
 uniform samplerExternalOES uTex;
+uniform vec2 uGridSize;
+uniform float uShowGrid;
+
 void main() {
-    gl_FragColor = texture2D(uTex, vUV);
+    vec4 color = texture2D(uTex, vUV);
+    if (uShowGrid > 0.5) {
+        vec2 cell = vUV * (uGridSize - 1.0);
+        vec2 d = abs(fract(cell) - 0.5) * 2.0;
+        float line = min(d.x, d.y);
+        float w = 0.008;
+        if (line < w) {
+            float a = smoothstep(w, 0.0, line) * 0.5;
+            color = mix(color, vec4(0.0, 1.0, 0.0, 1.0), a);
+        }
+    }
+    gl_FragColor = color;
 }
 """
     }
@@ -44,6 +58,8 @@ void main() {
     private var aPosLoc = 0
     private var aUVLoc = 0
     private var uTexLoc = 0
+    private var uGridSizeLoc = 0
+    private var uShowGridLoc = 0
 
     private var surfaceTexture: SurfaceTexture? = null
     private var surfaceTextureId = 0
@@ -63,6 +79,7 @@ void main() {
     var glSurfaceView: GLSurfaceView? = null
     @Volatile var enabled: Boolean = true
     @Volatile var bezier: Boolean = false
+    @Volatile var showGrid: Boolean = true
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
@@ -70,6 +87,8 @@ void main() {
         aPosLoc = GLES20.glGetAttribLocation(program, "aPos")
         aUVLoc = GLES20.glGetAttribLocation(program, "aUV")
         uTexLoc = GLES20.glGetUniformLocation(program, "uTex")
+        uGridSizeLoc = GLES20.glGetUniformLocation(program, "uGridSize")
+        uShowGridLoc = GLES20.glGetUniformLocation(program, "uShowGrid")
 
         val texIds = IntArray(1)
         GLES20.glGenTextures(1, texIds, 0)
@@ -112,6 +131,8 @@ void main() {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(program)
         GLES20.glUniform1i(uTexLoc, 0)
+        GLES20.glUniform2f(uGridSizeLoc, meshProvider()?.cols?.toFloat() ?: 2f, meshProvider()?.rows?.toFloat() ?: 2f)
+        GLES20.glUniform1f(uShowGridLoc, if (showGrid) 1f else 0f)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, surfaceTextureId)
 
