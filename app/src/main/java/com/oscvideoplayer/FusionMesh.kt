@@ -75,8 +75,14 @@ class FusionMesh {
 
     fun setPoint(row: Int, col: Int, x: Float, y: Float) {
         if (row in 0 until rows && col in 0 until cols) {
+            val old = points[row][col]
+            val dx = x - old.x; val dy = y - old.y
             points[row][col] = Point(x, y)
-            autoHandles(row, col)
+            // Move handles with point (preserve relative offset)
+            for (d in Dir.values()) {
+                val h = handleData.getOrNull(row)?.getOrNull(col)?.getOrNull(d.ordinal) ?: continue
+                h.x += dx; h.y += dy
+            }
         }
     }
 

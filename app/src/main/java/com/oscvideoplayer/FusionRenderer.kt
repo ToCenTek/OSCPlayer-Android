@@ -61,7 +61,7 @@ void main() {
     private var vertCount = 0
 
     var glSurfaceView: GLSurfaceView? = null
-    @Volatile var enabled: Boolean = false
+    @Volatile var enabled: Boolean = true
     @Volatile var bezier: Boolean = false
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -147,26 +147,33 @@ void main() {
         vertBuffer.clear()
         vertCount = 0
 
-        // For each cell, render 2 triangles (6 vertices) or subdivide for bezier
-        val sub = if (bezier) 8 else 1 // sub-cells per cell edge for bezier smoothing
+        // For each cell, render 2 triangles
         for (r in 0 until rows - 1) {
             for (c in 0 until cols - 1) {
-                for (sr in 0 until sub) for (sc in 0 until sub) {
-                    val fu = sc.toFloat() / sub; val fv = sr.toFloat() / sub
-                    val fu1 = (sc + 1).toFloat() / sub; val fv1 = (sr + 1).toFloat() / sub
-
-                    val p00 = getPoint(mesh, r, c, fu, fv)
-                    val p10 = getPoint(mesh, r, c, fu1, fv)
-                    val p01 = getPoint(mesh, r, c, fu, fv1)
-                    val p11 = getPoint(mesh, r, c, fu1, fv1)
-
-                    val tu = (c + fu) / (cols - 1); val tv = (r + fv) / (rows - 1)
-                    val tu1 = (c + fu1) / (cols - 1); val tv1 = (r + fv1) / (rows - 1)
-
-                    emit(p00.x, p00.y, tu, tv); emit(p10.x, p10.y, tu1, tv)
-                    emit(p01.x, p01.y, tu, tv1)
-                    emit(p10.x, p10.y, tu1, tv); emit(p11.x, p11.y, tu1, tv1)
-                    emit(p01.x, p01.y, tu, tv1)
+                if (!bezier) {
+                    val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
+                    val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
+                    val tu0 = c.toFloat() / (cols - 1); val tu1 = (c + 1).toFloat() / (cols - 1)
+                    val tv0 = r.toFloat() / (rows - 1); val tv1 = (r + 1).toFloat() / (rows - 1)
+                    emit(p00.x, p00.y, tu0, tv0); emit(p10.x, p10.y, tu1, tv0)
+                    emit(p01.x, p01.y, tu0, tv1)
+                    emit(p10.x, p10.y, tu1, tv0); emit(p11.x, p11.y, tu1, tv1)
+                    emit(p01.x, p01.y, tu0, tv1)
+                } else {
+                    for (sr in 0 until 8) for (sc in 0 until 8) {
+                        val fu = sc.toFloat() / 8f; val fv = sr.toFloat() / 8f
+                        val fu1 = (sc + 1).toFloat() / 8f; val fv1 = (sr + 1).toFloat() / 8f
+                        val p00 = getPoint(mesh, r, c, fu, fv)
+                        val p10 = getPoint(mesh, r, c, fu1, fv)
+                        val p01 = getPoint(mesh, r, c, fu, fv1)
+                        val p11 = getPoint(mesh, r, c, fu1, fv1)
+                        val tu = (c + fu) / (cols - 1); val tv = (r + fv) / (rows - 1)
+                        val tu1 = (c + fu1) / (cols - 1); val tv1 = (r + fv1) / (rows - 1)
+                        emit(p00.x, p00.y, tu, tv); emit(p10.x, p10.y, tu1, tv)
+                        emit(p01.x, p01.y, tu, tv1)
+                        emit(p10.x, p10.y, tu1, tv); emit(p11.x, p11.y, tu1, tv1)
+                        emit(p01.x, p01.y, tu, tv1)
+                    }
                 }
             }
         }
