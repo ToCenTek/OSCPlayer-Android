@@ -59,7 +59,6 @@ void main() {
     private var vertBuffer: FloatBuffer = ByteBuffer.allocateDirect(MAX_VERTS * 4 * 4)
         .order(ByteOrder.nativeOrder()).asFloatBuffer()
     private var vertCount = 0
-    private var lastMeshSig = 0L
 
     var glSurfaceView: GLSurfaceView? = null
     @Volatile var enabled: Boolean = false
@@ -133,22 +132,16 @@ void main() {
         frameAvailable = true
     }
 
-    fun markMeshDirty() { lastMeshSig = 0L }
+    fun markMeshDirty() { }
 
     private fun buildMesh() {
         val mesh = meshProvider() ?: return
-        // Simple hash of current mesh to avoid unnecessary rebuilds
         if (!enabled) {
             vertBuffer.clear(); vertCount = 0
             emit(0f, 0f, 0f, 0f); emit(1f, 0f, 1f, 0f); emit(0f, 1f, 0f, 1f)
             emit(1f, 0f, 1f, 0f); emit(1f, 1f, 1f, 1f); emit(0f, 1f, 0f, 1f)
             vertBuffer.position(0); return
         }
-        val hash = (mesh.cols * 31 + mesh.rows * 37).toLong() +
-            (mesh.points[0][0].x * 1000).toLong() +
-            (mesh.points[mesh.rows - 1][mesh.cols - 1].y * 1000).toLong()
-        if (hash == lastMeshSig) return
-        lastMeshSig = hash
 
         val cols = mesh.cols; val rows = mesh.rows
         vertBuffer.clear()
@@ -181,29 +174,28 @@ void main() {
     }
 
     private fun getPoint(mesh: FusionMesh, r: Int, c: Int, fu: Float, fv: Float): FusionMesh.Point {
+        val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
+        val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
         if (!bezier) {
-            val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
-            val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
             return FusionMesh.Point(
                 lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv),
                 lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
             )
         }
-        // Bezier: evaluate horizontal bezier curve at 4 rows, then Catmull-Rom vertically
-        val R = mesh.rows; val C = mesh.cols
-        fun bx(row: Int, useX: Boolean): Float {
-            if (row < 0 || row >= R) {
-                // Extrapolate: use first/last row
-                val rr = row.coerceIn(0, R - 1)
-                return mesh.bezierX(rr, c, FusionMesh.Dir.RIGHT, fu, useX)
-            }
-            return mesh.bezierX(row, c, FusionMesh.Dir.RIGHT, fu, useX)
-        }
-        val x0 = bx(r - 1, true); val x1 = bx(r, true); val x2 = bx(r + 1, true); val x3 = bx(r + 2, true)
-        val y0 = bx(r - 1, false); val y1 = bx(r, false); val y2 = bx(r + 1, false); val y3 = bx(r + 2, false)
+        // Bezier Coons patch: blend 4 edges
+        val topx = mesh.bezierX(r, c, FusionMesh.Dir.RIGHT, fu, true)
+        val botx = mesh.bezierX(r + 1, c, FusionMesh.Dir.RIGHT, fu, true)
+        val leftx = mesh.bezierX(r, c, FusionMesh.Dir.DOWN, fv, true)
+        val rightx = mesh.bezierX(r, c + 1, FusionMesh.Dir.DOWN, fv, true)
+        val topy = mesh.bezierX(r, c, FusionMesh.Dir.RIGHT, fu, false)
+        val boty = mesh.bezierX(r + 1, c, FusionMesh.Dir.RIGHT, fu, false)
+        val lefty = mesh.bezierX(r, c, FusionMesh.Dir.DOWN, fv, false)
+        val righty = mesh.bezierX(r, c + 1, FusionMesh.Dir.DOWN, fv, false)
+        val bilinx = lerp(lerp(p00.x, p10.x, fu), lerp(p01.x, p11.x, fu), fv)
+        val biliny = lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
         return FusionMesh.Point(
-            catmullRom1D(x0, x1, x2, x3, fv),
-            catmullRom1D(y0, y1, y2, y3, fv)
+            lerp(topx, botx, fv) + lerp(leftx, rightx, fu) - bilinx,
+            lerp(topy, boty, fv) + lerp(lefty, righty, fu) - biliny
         )
     }
 
