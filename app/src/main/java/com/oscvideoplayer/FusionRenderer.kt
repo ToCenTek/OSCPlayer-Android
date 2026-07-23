@@ -136,7 +136,8 @@ void main() {
 
     private fun buildMesh() {
         val mesh = meshProvider() ?: return
-        Log.d(TAG, "buildMesh: p00=(${mesh.points[0][0].x},${mesh.points[0][0].y}) p01=(${mesh.points[0][1].x},${mesh.points[0][1].y})")
+        // Log first build only
+        if (vertCount == 0) Log.d(TAG, "buildMesh: p00=(${mesh.points[0][0].x},${mesh.points[0][0].y})")
         if (!enabled) {
             vertBuffer.clear(); vertCount = 0
             emit(0f, 0f, 0f, 0f); emit(1f, 0f, 1f, 0f); emit(0f, 1f, 0f, 1f)

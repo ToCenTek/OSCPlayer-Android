@@ -50,17 +50,30 @@ class MainActivity : AppCompatActivity() {
     private var playerView: PlayerView? = null
     private var fusionGLView: android.opengl.GLSurfaceView? = null
     private var fusionRenderer: FusionRenderer? = null
-    private var glReady = false
-
     private fun tryConnectGl() {
         val p = player
         val r = fusionRenderer
-        if (p == null || r == null) { glReady = false; return }
-        if (!glReady || !r.surfaceReady) { glReady = true; return }
-        playerView?.player = null
-        playerView?.visibility = android.view.View.GONE
+        Log.d(TAG, "tryConnectGl: player=${p != null} renderer=${r != null} surfaceReady=${r?.surfaceReady} videoSurface=${r?.videoSurface}")
+        if (p == null || r == null) return
+        if (!r.surfaceReady) return
         p.setVideoSurface(r.videoSurface)
+        runOnUiThread {
+            playerView?.player = null
+            playerView?.visibility = android.view.View.GONE
+        }
         Log.d(TAG, "GL surface connected")
+    }
+
+    private fun startGlRetry() {
+        Thread {
+            for (i in 0 until 50) {
+                Thread.sleep(100)
+                if (fusionRenderer?.surfaceReady == true && player != null) {
+                    runOnUiThread { tryConnectGl() }
+                    return@Thread
+                }
+            }
+        }.apply { isDaemon = true; start() }
     }
     private var isInitialized = false
     private var oscServer: OSCServer? = null
@@ -154,39 +167,42 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        hideSystemUI()
-        setContentView(R.layout.activity_main)
-        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        playerView = findViewById(R.id.playerView)
-        if (playerView == null) {
-            inflatePlayerView()
+        try {
+            super.onCreate(savedInstanceState)
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            hideSystemUI()
+            setContentView(R.layout.activity_main)
+            prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             playerView = findViewById(R.id.playerView)
-        }
-
-        fusionGLView = findViewById(R.id.fusionView)
-        fusionRenderer = FusionRenderer(
-            meshProvider = { fusionMesh },
-            onSurfaceCreated = { _ ->
-                // GL surface ready flag - picked up by main thread in initializePlayer
-                glReady = true
+            if (playerView == null) {
+                inflatePlayerView()
+                playerView = findViewById(R.id.playerView)
             }
-        )
-        fusionRenderer?.glSurfaceView = fusionGLView
-        fusionGLView?.setEGLContextClientVersion(2)
-        fusionGLView?.setRenderer(fusionRenderer)
-        fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
 
-        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
+            fusionGLView = findViewById(R.id.fusionView)
+            fusionRenderer = FusionRenderer(
+                meshProvider = { fusionMesh },
+            onSurfaceCreated = { _ ->
+                tryConnectGl()
+            }
+            )
+            fusionRenderer?.glSurfaceView = fusionGLView
+            fusionGLView?.setEGLContextClientVersion(2)
+            fusionGLView?.setRenderer(fusionRenderer)
+            fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
 
-        val isFromBoot = intent.getBooleanExtra("from_boot", false)
-        Log.d(TAG, "onCreate: isFromBoot=$isFromBoot")
+            volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
-        val videoPath = intent.getStringExtra("video_path")
-        pendingVideoPath = videoPath
+            val isFromBoot = intent.getBooleanExtra("from_boot", false)
+            Log.d(TAG, "onCreate: isFromBoot=$isFromBoot")
 
-        requestPermissions(videoPath)
+            val videoPath = intent.getStringExtra("video_path")
+            pendingVideoPath = videoPath
+
+            requestPermissions(videoPath)
+        } catch (e: Exception) {
+            Log.e(TAG, "onCreate error: ${e.message}")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -228,6 +244,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startApp(playVideoPath: String? = null) {
+        Log.d(TAG, "startApp: path=$playVideoPath initialized=$isInitialized")
         if (isInitialized) { Log.d(TAG, "startApp skipped, already initialized"); return }
         isInitialized = true
 
@@ -615,6 +632,8 @@ class MainActivity : AppCompatActivity() {
                 }
             // PlayerView displays controls/buffering; video rendered via GL surface
             tryConnectGl()
+            // Start GL retry loop
+            startGlRetry()
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
             }
