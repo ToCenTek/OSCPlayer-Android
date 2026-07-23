@@ -22,20 +22,25 @@ class FusionRenderer(
         private const val FSH = "#extension GL_OES_EGL_image_external:require\nprecision mediump float;varying vec2 vUV;uniform samplerExternalOES uTex;void main(){gl_FragColor=texture2D(uTex,vUV);}"
     }
     private var program=0;private var aPosLoc=0;private var aUVLoc=0;private var uTexLoc=0
+    private var gridProgram=0;private var gPosLoc=0
     private var surfaceTexture:SurfaceTexture?=null;private var surfaceTextureId=0
     private var frameAvailable=false
     @Volatile var surfaceReady:Boolean=false;private set
     private var surfaceObj:Surface?=null;val videoSurface:Surface? get()=surfaceObj
     private val MAX_VERTS=130*130*6
     private var vertBuffer:FloatBuffer=ByteBuffer.allocateDirect(MAX_VERTS*4*4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-    private var vertCount=0;private var meshHash=0L
+    private var vertCount=0;@Volatile private var meshHash=0L
     var glSurfaceView:GLSurfaceView?=null
     @Volatile var enabled:Boolean=true
+    @Volatile var showGrid:Boolean=true
 
     override fun onSurfaceCreated(gl:GL10?,config:EGLConfig?){
         GLES20.glClearColor(0f,0f,0f,1f)
         program=createProgram(VSH,FSH);aPosLoc=GLES20.glGetAttribLocation(program,"aPos")
-        aUVLoc=GLES20.glGetAttribLocation(program,"aUV");uTexLoc=GLES20.glGetUniformLocation(program,"uTex")
+        aUVLoc=GLES20.glGetAttribLocation(program,"aUV");        uTexLoc=GLES20.glGetUniformLocation(program,"uTex")
+        val GVS="attribute vec2 aPos;void main(){gl_Position=vec4(aPos,0.0,1.0);}"
+        val GFS="precision mediump float;void main(){gl_FragColor=vec4(0.0,1.0,0.0,0.5);}"
+        gridProgram=createProgram(GVS,GFS);gPosLoc=GLES20.glGetAttribLocation(gridProgram,"aPos")
         val ids=IntArray(1);GLES20.glGenTextures(1,ids,0);surfaceTextureId=ids[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,surfaceTextureId)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,GLES20.GL_TEXTURE_MIN_FILTER,GLES20.GL_LINEAR)
@@ -65,10 +70,30 @@ class FusionRenderer(
             GLES20.glEnableVertexAttribArray(aUVLoc)
             GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,vertCount)
         }
+        if(showGrid)drawGrid()
     }
     override fun onFrameAvailable(st:SurfaceTexture?){frameAvailable=true}
     fun markMeshDirty(){meshHash=0L}
     private fun lerp(a:Float,b:Float,t:Float)=a+(b-a)*t
+    private fun drawGrid(){
+        val mesh=meshProvider()?:return
+        try{
+            GLES20.glUseProgram(gridProgram);GLES20.glEnableVertexAttribArray(gPosLoc)
+            val cols=mesh.cols;val rows=mesh.rows
+            for(r in 0 until rows)for(c in 0 until cols-1){
+                val a=mesh.points[r][c];val b=mesh.points[r][c+1]
+                val buf=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                buf.put(a.x*2f-1f);buf.put((1f-a.y)*2f-1f);buf.put(b.x*2f-1f);buf.put((1f-b.y)*2f-1f);buf.position(0)
+                GLES20.glVertexAttribPointer(gPosLoc,2,GLES20.GL_FLOAT,false,8,buf);GLES20.glDrawArrays(GLES20.GL_LINES,0,2)
+            }
+            for(c in 0 until cols)for(r in 0 until rows-1){
+                val a=mesh.points[r][c];val b=mesh.points[r+1][c]
+                val buf=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                buf.put(a.x*2f-1f);buf.put((1f-a.y)*2f-1f);buf.put(b.x*2f-1f);buf.put((1f-b.y)*2f-1f);buf.position(0)
+                GLES20.glVertexAttribPointer(gPosLoc,2,GLES20.GL_FLOAT,false,8,buf);GLES20.glDrawArrays(GLES20.GL_LINES,0,2)
+            }
+        }catch(_:Exception){}
+    }
 
     private fun buildMesh(){
         val mesh=meshProvider()?:return
