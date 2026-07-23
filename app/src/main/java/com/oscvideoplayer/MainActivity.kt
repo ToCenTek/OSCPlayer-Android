@@ -48,6 +48,24 @@ class MainActivity : AppCompatActivity() {
 
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
+    private var fusionGLView: android.opengl.GLSurfaceView? = null
+    private var fusionRenderer: FusionRenderer? = null
+    private var glSurfaceReady = false
+
+    private fun connectGlSurface() {
+        val r = fusionRenderer
+        val p = player
+        if (p == null) return
+        if (r == null || !r.surfaceReady) {
+            playerView?.player = p
+            playerView?.visibility = android.view.View.VISIBLE
+            return
+        }
+        playerView?.player = null
+        playerView?.visibility = android.view.View.GONE
+        p.setVideoSurface(r.videoSurface)
+        Log.d(TAG, "GL surface connected to player")
+    }
     private var isInitialized = false
     private var oscServer: OSCServer? = null
     private var videoScanner: VideoScanner? = null
@@ -81,6 +99,7 @@ class MainActivity : AppCompatActivity() {
     private var screenReceiver: ScreenReceiver? = null
     private var scheduleStartTime: String? = null
     private var httpUploadServer: HttpUploadServer? = null
+    private var fusionMesh: FusionMesh? = null
     private var scheduleStopTime: String? = null
     private var powerOnTime: String? = null
     private var powerOffTime: String? = null
@@ -150,6 +169,22 @@ class MainActivity : AppCompatActivity() {
             playerView = findViewById(R.id.playerView)
         }
 
+        fusionGLView = findViewById(R.id.fusionView)
+        fusionRenderer = FusionRenderer(
+            meshProvider = { fusionMesh },
+            onSurfaceCreated = { _ ->
+                // GL surface ready; connect player if available
+                runOnUiThread {
+                    glSurfaceReady = true
+                    connectGlSurface()
+                }
+            }
+        )
+        fusionRenderer?.glSurfaceView = fusionGLView
+        fusionGLView?.setEGLContextClientVersion(2)
+        fusionGLView?.setRenderer(fusionRenderer)
+        fusionGLView?.renderMode = android.opengl.GLSurfaceView.RENDERMODE_CONTINUOUSLY
+
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
 
         val isFromBoot = intent.getBooleanExtra("from_boot", false)
@@ -194,11 +229,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun inflatePlayerView() {
         val container = findViewById<android.widget.FrameLayout>(com.oscvideoplayer.R.id.playerContainer) ?: return
-        val useSurface = prefs?.getBoolean(KEY_SURFACE_MODE, true) ?: true
-        val layoutRes = if (useSurface) com.oscvideoplayer.R.layout.player_view_surface
-                       else com.oscvideoplayer.R.layout.player_view_texture
         container.removeAllViews()
-        android.view.LayoutInflater.from(this).inflate(layoutRes, container, true)
+        android.view.LayoutInflater.from(this).inflate(
+            com.oscvideoplayer.R.layout.player_view_surface, container, true)
     }
 
     private fun startApp(playVideoPath: String? = null) {
@@ -587,7 +620,7 @@ class MainActivity : AppCompatActivity() {
                          }
                      })
                 }
-            playerView?.player = player
+            connectGlSurface()
             if (stereoMode != "off") {
                 playerView?.postDelayed({ applyStereoTransform() }, 300)
             }
@@ -639,6 +672,7 @@ class MainActivity : AppCompatActivity() {
     private fun startHttpUploadServer() {
         try {
             val dir = getDefaultDirectory()
+            fusionMesh = FusionMesh()
             httpUploadServer = HttpUploadServer(
                 port = 8080,
                 uploadDir = dir,
@@ -647,7 +681,83 @@ class MainActivity : AppCompatActivity() {
                 getVideoInfoProvider = { path -> getFileInfo(path) },
                 togglePlayPauseProvider = { runOnUiThread { togglePlayPause() } },
                 isPlayingProvider = { cachedIsPlaying },
-                currentVideoPathProvider = { activeVideoPath }
+                currentVideoPathProvider = { activeVideoPath },
+                fusionProvider = {
+                    val m = fusionMesh ?: return@HttpUploadServer null
+                    object : HttpUploadServer.FusionAPI {
+                        override fun getJson() = m.toJson().toString()
+                        override fun setPoint(row: Int, col: Int, x: Float, y: Float) {
+                            m.setPoint(row, col, x, y)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun resize(cols: Int, rows: Int) {
+                            m.resize(cols, rows)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun setSubdiv(sx: Int, sy: Int) {
+                            m.setSubdiv(sx, sy)
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun regularize() {
+                            m.regularize()
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun reset() {
+                            m.reset()
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        override fun enable(on: Boolean) {
+                            Log.d(TAG, "Fusion enable=$on")
+                            _fusionEnabled = on
+                            fusionRenderer?.enabled = on
+                            fusionRenderer?.markMeshDirty()
+                        }
+                        private var _fusionEnabled = true
+                        override fun isEnabled() = _fusionEnabled
+                        override fun getStateJson(): String {
+                            val state = org.json.JSONObject()
+                            state.put("enabled", isEnabled())
+                            state.put("mesh", m.toJson())
+                            val src = org.json.JSONObject()
+                            src.put("x", 0); src.put("y", 0); src.put("w", 1); src.put("h", 1)
+                            state.put("source", src)
+                            val dm = android.util.DisplayMetrics()
+                            try {
+                                windowManager.defaultDisplay.getRealMetrics(dm)
+                                state.put("displayWidth", dm.widthPixels)
+                                state.put("displayHeight", dm.heightPixels)
+                            } catch (_: Exception) {}
+                            return state.toString()
+                        }
+                        override fun savePreset(name: String): Boolean {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            dir.mkdirs()
+                            val file = java.io.File(dir, "$name.json")
+                            return try {
+                                file.writeText(m.toJson().toString(2))
+                                Log.d(TAG, "Preset saved: $file")
+                                true
+                            } catch (e: Exception) { false }
+                        }
+                        override fun loadPreset(name: String): Boolean {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            val file = java.io.File(dir, "$name.json")
+                            return try {
+                                val json = org.json.JSONObject(file.readText())
+                                m.fromJson(json)
+                                fusionRenderer?.markMeshDirty()
+                                Log.d(TAG, "Preset loaded: $file")
+                                true
+                            } catch (e: Exception) { false }
+                        }
+                        override fun listPresets(): String {
+                            val dir = java.io.File(getDefaultDirectory(), "presets")
+                            val files = dir.listFiles { f -> f.name.endsWith(".json") } ?: emptyArray()
+                            val names = files.map { it.name.removeSuffix(".json") }
+                            return org.json.JSONArray(names.toList()).toString()
+                        }
+                    }
+                }
             )
             httpUploadServer?.start()
             Log.d(TAG, "HttpUploadServer started on port 8080, dir=$dir")

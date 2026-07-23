@@ -18,7 +18,8 @@ class HttpUploadServer(
     private val getVideoInfoProvider: ((String) -> Map<String, Any>)? = null,
     private val togglePlayPauseProvider: (() -> Unit)? = null,
     private val isPlayingProvider: (() -> Boolean)? = null,
-    private val currentVideoPathProvider: (() -> String?)? = null
+    private val currentVideoPathProvider: (() -> String?)? = null,
+    private val fusionProvider: (() -> FusionAPI?)? = null
 ) {
     private val tag = "HttpUploadServer"
     private var serverSocket: ServerSocket? = null
@@ -85,6 +86,9 @@ class HttpUploadServer(
                 method == "GET" && path == "/" -> serveHtml(client)
                 method == "GET" && path.startsWith("/files") -> serveFiles(client, path)
                 method == "POST" && path == "/upload" -> handleUpload(client, input, headers, contentLength)
+                method == "GET" && path == "/fusion/editor" -> serveFusionEditor(client)
+                method == "GET" && path.startsWith("/fusion/api") -> handleFusionApi(client, method, path, input, contentLength)
+                method == "POST" && path.startsWith("/fusion/api") -> handleFusionApi(client, method, path, input, contentLength)
                 else -> sendResponse(client, 404, "Not Found", "text/plain", "Not Found")
             }
         } catch (e: OutOfMemoryError) {
@@ -613,5 +617,140 @@ btn.onclick=function(){
             out.write(body)
             out.flush()
         } catch (_: Exception) {}
+    }
+
+    // ────── Fusion API ──────
+
+    interface FusionAPI {
+        fun getJson(): String
+        fun setPoint(row: Int, col: Int, x: Float, y: Float)
+        fun resize(cols: Int, rows: Int)
+        fun setSubdiv(sx: Int, sy: Int)
+        fun regularize()
+        fun reset()
+        fun enable(on: Boolean)
+        fun isEnabled(): Boolean
+        fun getStateJson(): String
+        fun savePreset(name: String): Boolean
+        fun loadPreset(name: String): Boolean
+        fun listPresets(): String
+    }
+
+    private var _fusionApi: FusionAPI? = null
+    private val fusionApi: FusionAPI?
+        get() {
+            if (_fusionApi == null) _fusionApi = fusionProvider?.invoke()
+            return _fusionApi
+        }
+
+    private fun serveFusionEditor(client: Socket) {
+        sendResponse(client, 200, "OK", "text/html; charset=utf-8", FusionEditorHtml.HTML)
+    }
+
+    private fun handleFusionApi(client: Socket, method: String, path: String, input: java.io.InputStream, contentLength: Long) {
+        val api = fusionApi
+        if (api == null) {
+            return sendResponse(client, 503, "Unavailable", "application/json", """{"error":"fusion not initialized"}""")
+        }
+        val cmd = path.removePrefix("/fusion/api/").removeSuffix("/")
+        val firstSlash = cmd.indexOf('/')
+        val mainCmd = if (firstSlash > 0) cmd.substring(0, firstSlash) else cmd
+        val subPath = if (firstSlash > 0) cmd.substring(firstSlash + 1) else ""
+        try {
+            when (mainCmd) {
+                "state" -> sendResponse(client, 200, "OK", "application/json", api.getStateJson())
+                "mesh" -> {
+                    if (method == "POST" && contentLength > 0) {
+                        val body = readBody(input, contentLength)
+                        val json = org.json.JSONObject(body)
+                        when (json.optString("action")) {
+                            "set" -> {
+                                val row = json.getInt("row")
+                                val col = json.getInt("col")
+                                val x = json.getDouble("x").toFloat()
+                                val y = json.getDouble("y").toFloat()
+                                api.setPoint(row, col, x, y)
+                                sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
+                            }
+                            "set_multi" -> {
+                                val pts = json.getJSONArray("points")
+                                for (i in 0 until pts.length()) {
+                                    val p = pts.getJSONObject(i)
+                                    api.setPoint(p.getInt("row"), p.getInt("col"),
+                                        p.getDouble("x").toFloat(), p.getDouble("y").toFloat())
+                                }
+                                sendResponse(client, 200, "OK", "application/json", """{"ok":true}""")
+                            }
+                            "resize" -> {
+                                val newCols = json.optInt("cols", 9).coerceIn(2, 65)
+                                val newRows = json.optInt("rows", 9).coerceIn(2, 65)
+                                api.resize(newCols, newRows)
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
+                            }
+                            "subdiv" -> {
+                                val sx = json.optInt("subdivX", 0)
+                                val sy = json.optInt("subdivY", 0)
+                                api.setSubdiv(sx, sy)
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
+                            }
+                            "regularize" -> {
+                                api.regularize()
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
+                            }
+                            "reset" -> {
+                                api.reset()
+                                sendResponse(client, 200, "OK", "application/json", api.getJson())
+                            }
+                            else -> sendResponse(client, 400, "Bad Request", "application/json", """{"error":"unknown action"}""")
+                        }
+                    } else {
+                        sendResponse(client, 200, "OK", "application/json", api.getJson())
+                    }
+                }
+                "enable" -> {
+                    if (method == "POST" && contentLength > 0) {
+                        val body = readBody(input, contentLength)
+                        val json = org.json.JSONObject(body)
+                        api.enable(json.optBoolean("enable", true))
+                    }
+                    sendResponse(client, 200, "OK", "application/json", """{"enabled":${api.isEnabled()}}""")
+                }
+                "preset" -> {
+                    when {
+                        subPath == "list" -> sendResponse(client, 200, "OK", "application/json", api.listPresets())
+                        subPath.startsWith("save/") -> {
+                            val ok = api.savePreset(subPath.removePrefix("save/"))
+                            sendResponse(client, 200, "OK", "application/json", """{"ok":$ok}""")
+                        }
+                        subPath.startsWith("load/") -> {
+                            val ok = api.loadPreset(subPath.removePrefix("load/"))
+                            if (ok) sendResponse(client, 200, "OK", "application/json", api.getStateJson())
+                            else sendResponse(client, 404, "Not Found", "application/json", """{"error":"preset not found"}""")
+                        }
+                        else -> sendResponse(client, 400, "Bad Request", "application/json", """{"error":"unknown preset command"}""")
+                    }
+                }
+                else -> sendResponse(client, 404, "Not Found", "application/json", """{"error":"unknown endpoint"}""")
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Fusion API error: ${e.message}")
+            sendResponse(client, 500, "Error", "application/json", """{"error":"${e.message?.replace("\"", "\\\"") ?: "unknown"}"}""")
+        }
+    }
+
+    private fun readBody(input: java.io.InputStream, length: Long): String {
+        val buf = ByteArrayOutputStream()
+        var remaining = length
+        val tmp = ByteArray(4096)
+        while (remaining > 0) {
+            val n = input.read(tmp, 0, minOf(tmp.size, remaining.toInt())).coerceAtLeast(0)
+            if (n == 0) break
+            buf.write(tmp, 0, n)
+            remaining -= n
+        }
+        return buf.toString("UTF-8")
+    }
+
+    companion object {
     }
 }
