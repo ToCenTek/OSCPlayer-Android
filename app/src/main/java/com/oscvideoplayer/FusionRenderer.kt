@@ -181,7 +181,6 @@ void main() {
     }
 
     private fun getPoint(mesh: FusionMesh, r: Int, c: Int, fu: Float, fv: Float): FusionMesh.Point {
-        val cols = mesh.cols; val rows = mesh.rows
         if (!bezier) {
             val p00 = mesh.points[r][c]; val p10 = mesh.points[r][c + 1]
             val p01 = mesh.points[r + 1][c]; val p11 = mesh.points[r + 1][c + 1]
@@ -190,23 +189,20 @@ void main() {
                 lerp(lerp(p00.y, p10.y, fu), lerp(p01.y, p11.y, fu), fv)
             )
         }
-        // Bezier: sample 4 points in X direction at 4 Y positions, then interpolate Y
-        val p0 = catmullRow(mesh, r, c, fu)
-        val p1 = catmullRow(mesh, r + 1, c, fu)
-        val p2 = catmullRow(mesh, r - 1, c, fu)
-        val p3 = catmullRow(mesh, r + 2, c, fu)
-        return FusionMesh.Point(
-            catmullRom1D(p2.x, p0.x, p1.x, p3.x, fv),
-            catmullRom1D(p2.y, p0.y, p1.y, p3.y, fv)
-        )
-    }
-
-    // Catmull-Rom interpolation along a row at position fu between cols c and c+1
-    private fun catmullRow(mesh: FusionMesh, r: Int, c: Int, fu: Float): FusionMesh.Point {
-        val cr = r.coerceIn(0, mesh.rows - 1)
-        val x0 = mesh.colAt(cr, c - 1); val x1 = mesh.colAt(cr, c); val x2 = mesh.colAt(cr, c + 1); val x3 = mesh.colAt(cr, c + 2)
-        val y0 = mesh.rowAt(cr, c - 1); val y1 = mesh.rowAt(cr, c); val y2 = mesh.rowAt(cr, c + 1); val y3 = mesh.rowAt(cr, c + 2)
-        return FusionMesh.Point(catmullRom1D(x0, x1, x2, x3, fu), catmullRom1D(y0, y1, y2, y3, fu))
+        // Bezier: sample 4 horizontal bezier curves at 4 vertical positions
+        val t = { idx: Int -> catmullRom1D(
+            mesh.bezierX(r - 1 + idx, c, FusionMesh.Dir.RIGHT, fu, true),
+            mesh.bezierX(r + idx, c, FusionMesh.Dir.RIGHT, fu, true),
+            mesh.bezierX(r + 1 + idx, c, FusionMesh.Dir.RIGHT, fu, true),
+            mesh.bezierX(r + 2 + idx, c, FusionMesh.Dir.RIGHT, fu, true), fv
+        )}
+        val yy = { idx: Int -> catmullRom1D(
+            mesh.bezierX(r - 1 + idx, c, FusionMesh.Dir.RIGHT, fu, false),
+            mesh.bezierX(r + idx, c, FusionMesh.Dir.RIGHT, fu, false),
+            mesh.bezierX(r + 1 + idx, c, FusionMesh.Dir.RIGHT, fu, false),
+            mesh.bezierX(r + 2 + idx, c, FusionMesh.Dir.RIGHT, fu, false), fv
+        )}
+        return FusionMesh.Point(t(0), yy(0))
     }
 
     private fun emit(x: Float, y: Float, tu: Float, tv: Float) {

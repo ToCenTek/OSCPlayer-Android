@@ -690,6 +690,11 @@ class MainActivity : AppCompatActivity() {
                             m.setPoint(row, col, x, y)
                             fusionRenderer?.markMeshDirty()
                         }
+                        override fun setHandle(row: Int, col: Int, dir: Int, x: Float, y: Float) {
+                            val d = FusionMesh.Dir.values().getOrNull(dir) ?: return
+                            m.setHandle(row, col, d, x, y)
+                            fusionRenderer?.markMeshDirty()
+                        }
                         override fun resize(cols: Int, rows: Int) {
                             m.resize(cols, rows)
                             fusionRenderer?.markMeshDirty()
